@@ -1,104 +1,119 @@
-# modules/page_appendix.py
+# =============================
+# modules/page_appendix.py — Appendix (그래프 + 요약 스토리라인 포함)
+# =============================
 from shiny import ui, render
+from shared import report_df
+from viz.appendix_plots import (
+    render_data_head,
+    render_data_schema,
+    render_basic_stats,
+    render_missing_summary,
+    render_outlier_summary,
+    plot_distribution,
+    plot_correlation_heatmap,
+    plot_time_trend,
+    plot_hourly_pattern,
+    plot_weekday_pattern,
+    plot_worktype_distribution,
+    render_pipeline_accordion,
+    render_feature_summary,
+    render_scaling_info,
+    render_leakage_check,
+    render_eda_storyline_panels,  # ⬅️ 스토리(요약 텍스트) + 그래프 묶음
+)
 
-# ─────────────────────────────────────────────
-# Appendix UI
-# ─────────────────────────────────────────────
+
 def appendix_ui():
     return ui.page_fluid(
-        # ui.tags.link(rel="stylesheet", href="styles.css"),
+        ui.tags.link(rel="stylesheet", href="appendix.css"),
+
+        # ===== Header (outside tabs) =====
+        ui.div(
+            ui.div(
+                ui.h4("데이터 부록 (Appendix)", class_="billx-title"),
+                ui.span("분석 맥락과 데이터 사전", class_="billx-sub"),
+                class_="billx-titlebox",
+            ),
+            class_="billx-ribbon billx apx-header",
+        ),
 
         ui.navset_card_pill(
             # ========= 개요 =========
             ui.nav_panel(
                 "개요",
                 ui.layout_columns(
-                    ui.card(
-                        ui.card_header("프로젝트 개요"),
-                        ui.tags.ul(
-                            ui.tags.li("목표: 공장 전력 사용량/요금 분석 및 예측"),
-                            ui.tags.li("데이터 기간: 2024-01 ~ 2024-11"),
-                            ui.tags.li("주요 컬럼: 측정일시, 전력사용량(kWh), 전기요금(원), 작업유형 등"),
+                    ui.div(
+                        ui.h5("📋 프로젝트 개요", class_="billx-panel-title"),
+                        ui.div(
+                            ui.tags.h6("🎯 목적", class_="mt-2 mb-1"),
+                            ui.tags.p("공장 전력 사용량/요금 분석 및 예측", class_="ms-1 small"),
+                            ui.tags.h6("📅 데이터 기간", class_="mt-3 mb-1"),
+                            ui.tags.p("2024년 1월 ~ 11월", class_="ms-1 small"),
+                            ui.tags.h6("⏱️ 측정 간격", class_="mt-3 mb-1"),
+                            ui.tags.p("15분 단위 (일 96개 레코드)", class_="ms-1 small"),
+                            ui.tags.h6("🎯 예측 타겟", class_="mt-3 mb-1"),
+                            ui.tags.p("전기요금(원)", class_="ms-1 fw-bold text-primary"),
+                            ui.tags.h6("📊 주요 입력 변수", class_="mt-3 mb-1"),
+                            ui.tags.ul(
+                                ui.tags.li("전력사용량(kWh)"),
+                                ui.tags.li("무효전력량 (지상/진상)"),
+                                ui.tags.li("역률 (지상/진상)"),
+                                ui.tags.li("작업유형"),
+                                class_="ms-2",
+                            ),
+                            class_="billx-panel-body",
                         ),
-                        ui.hr({"class": "soft"}),
-                        ui.div({"class": "small-muted"}, "※ 상세 정의는 ‘EDA > 데이터 사전’에서 확인"),
+                        class_="billx-panel",
                     ),
-                    ui.card(
-                        ui.card_header("데이터 스냅샷"),
-                        ui.output_ui("apx_head_table"),
-                        ui.hr({"class": "soft"}),
-                        ui.div({"class": "small-muted"}, "상위 5~10행 미리보기"),
+                    ui.div(
+                        ui.h5("📚 데이터 사전 (Data Dictionary)", class_="billx-panel-title"),
+                        ui.output_ui("apx_schema_table"),
+                        class_="billx-panel",
                     ),
-                    col_widths=[6, 6],
+                    col_widths=[5, 7],
                 ),
-                ui.card(
-                    ui.card_header("데이터 사전 (Data Dictionary)"),
-                    ui.output_ui("apx_schema_table"),
+                ui.div(
+                    ui.h5("🔍 데이터 스냅샷 (상위 10행)", class_="billx-panel-title"),
+                    ui.output_ui("apx_head_table"),
+                    ui.div({"class": "small-muted mt-2"}, "※ 좌우 스크롤하여 전체 컬럼 확인 가능"),
+                    class_="billx-panel",
                 ),
             ),
 
             # ========= EDA =========
             ui.nav_panel(
                 "EDA",
+                # 0) 스토리라인(요약 텍스트 + 그래프 묶음) — "그래프랑 요약된 내용" 요구사항 반영
+                ui.output_ui("apx_eda_storyline"),
+
+                # 1) 기본 테이블/품질/분포/상관/패턴
+                ui.div(ui.h5("📊 기초 통계량", class_="billx-panel-title"), ui.output_ui("apx_basic_stats"), class_="billx-panel"),
                 ui.layout_columns(
-                    ui.card(
-                        ui.card_header("결측치/이상치 요약"),
-                        ui.output_ui("apx_missing_summary"),
-                        ui.hr({"class": "soft"}),
-                        ui.output_ui("apx_outlier_summary"),
-                    ),
-                    ui.card(
-                        ui.card_header("분포 · 상관"),
-                        ui.layout_columns(
-                            ui.div(
-                                ui.div({"class": "placeholder"}, "분포(히스토그램/커널)"),
-                                ui.output_ui("apx_dist_plot"),
-                                col_width=6,
-                            ),
-                            ui.div(
-                                ui.div({"class": "placeholder"}, "상관행렬(Heatmap)"),
-                                ui.output_ui("apx_corr_heatmap"),
-                                col_width=6,
-                            ),
-                        ),
-                    ),
-                    col_widths=[4, 8],
+                    ui.div(ui.h5("🔍 데이터 품질 점검", class_="billx-panel-title"), ui.output_ui("apx_missing_summary"), ui.hr({"class": "soft"}), ui.output_ui("apx_outlier_summary"), class_="billx-panel"),
+                    ui.div(ui.h5("📈 주요 변수 분포", class_="billx-panel-title"), ui.output_ui("apx_dist_plot"), class_="billx-panel"),
+                    col_widths=[5, 7],
                 ),
-                ui.card(
-                    ui.card_header("시계열 트렌드(요금/사용량)"),
-                    ui.output_ui("apx_time_trend"),
+                ui.layout_columns(
+                    ui.div(ui.h5("🔗 변수 간 상관관계", class_="billx-panel-title"), ui.output_ui("apx_corr_heatmap"), class_="billx-panel"),
+                    ui.div(ui.h5("⏰ 시간대별 패턴", class_="billx-panel-title"), ui.output_ui("apx_hourly_pattern"), class_="billx-panel"),
+                    col_widths=[6, 6],
                 ),
+                ui.layout_columns(
+                    ui.div(ui.h5("📅 요일별 패턴 (주말 강조)", class_="billx-panel-title"), ui.output_ui("apx_weekday_pattern"), class_="billx-panel"),
+                    ui.div(ui.h5("🏭 작업유형별 분포", class_="billx-panel-title"), ui.output_ui("apx_worktype_dist"), class_="billx-panel"),
+                    col_widths=[6, 6],
+                ),
+                ui.div(ui.h5("📈 시계열 추이 (일별 집계)", class_="billx-panel-title"), ui.output_ui("apx_time_trend"), class_="billx-panel"),
             ),
 
             # ========= 전처리 =========
             ui.nav_panel(
                 "전처리",
+                ui.div(ui.h5("🔧 전처리 파이프라인 (9단계)", class_="billx-panel-title"), ui.output_ui("apx_pipeline_accordion"), class_="billx-panel"),
+                ui.div(ui.h5("📝 생성된 피처 요약", class_="billx-panel-title"), ui.output_ui("apx_feature_summary"), class_="billx-panel"),
                 ui.layout_columns(
-                    ui.card(
-                        ui.card_header("파이프라인 개요"),
-                        ui.output_ui("apx_pipeline_text"),
-                        ui.hr({"class": "soft"}),
-                        ui.tags.ul(
-                            ui.tags.li("Datetime 파생: 월/주/요일/시간/분(15분)"),
-                            ui.tags.li("공휴일/주말 플래그, 계절, 근무/비근무 시간대"),
-                            ui.tags.li("라그·롤링·사이클릭 인코딩(hour_sin/cos 등)"),
-                        ),
-                    ),
-                    ui.card(
-                        ui.card_header("피처 목록/선정 근거"),
-                        ui.output_ui("apx_feature_table"),
-                    ),
-                    col_widths=[5, 7],
-                ),
-                ui.layout_columns(
-                    ui.card(
-                        ui.card_header("스케일링/인코딩 설정"),
-                        ui.output_ui("apx_scaling_table"),
-                    ),
-                    ui.card(
-                        ui.card_header("데이터 누수(Leakage) 점검"),
-                        ui.output_ui("apx_leakage_check"),
-                    ),
+                    ui.div(ui.h5("⚙️ 스케일링/인코딩 전략", class_="billx-panel-title"), ui.output_ui("apx_scaling_info"), class_="billx-panel"),
+                    ui.div(ui.h5("🛡️ 데이터 누수 점검", class_="billx-panel-title"), ui.output_ui("apx_leakage_check"), class_="billx-panel"),
                     col_widths=[6, 6],
                 ),
             ),
@@ -107,24 +122,14 @@ def appendix_ui():
             ui.nav_panel(
                 "모델링",
                 ui.layout_columns(
-                    ui.card(
-                        ui.card_header("실험 보드(Leaderboard)"),
-                        ui.output_ui("apx_leaderboard"),
-                        ui.hr({"class": "soft"}),
-                        ui.div({"class": "small-muted"}, "※ RMSE/MAE/R², 추론시간 등"),
-                    ),
-                    ui.card(
-                        ui.card_header("최종 모델 파라미터"),
-                        ui.output_ui("apx_model_params"),
-                    ),
+                    ui.div(ui.h5("🏆 실험 보드(Leaderboard)", class_="billx-panel-title"), ui.output_ui("apx_leaderboard"), ui.hr({"class": "soft"}), ui.div({"class": "small-muted"}, "※ RMSE/MAE/R², 추론시간 등"), class_="billx-panel"),
+                    ui.div(ui.h5("⚙️ 최종 모델 파라미터", class_="billx-panel-title"), ui.output_ui("apx_model_params"), class_="billx-panel"),
                     col_widths=[7, 5],
                 ),
-                ui.card(
-                    ui.card_header("학습/검증 곡선"),
-                    ui.layout_columns(
-                        ui.div(ui.output_ui("apx_train_curve"), col_width=6),
-                        ui.div(ui.output_ui("apx_val_curve"),   col_width=6),
-                    ),
+                ui.layout_columns(
+                    ui.div(ui.output_ui("apx_train_curve"), class_="billx-panel"),
+                    ui.div(ui.output_ui("apx_val_curve"), class_="billx-panel"),
+                    col_widths=[6, 6],
                 ),
             ),
 
@@ -132,116 +137,146 @@ def appendix_ui():
             ui.nav_panel(
                 "결과/검증",
                 ui.layout_columns(
-                    ui.card(
-                        ui.card_header("평가 지표"),
-                        ui.output_ui("apx_metrics_table"),
-                        ui.hr({"class": "soft"}),
-                        ui.output_ui("apx_residual_plot"),
-                    ),
-                    ui.card(
-                        ui.card_header("설명가능성 (XAI)"),
-                        ui.output_ui("apx_shap_summary"),
-                        ui.hr({"class": "soft"}),
-                        ui.output_ui("apx_shap_bar"),
-                    ),
+                    ui.div(ui.h5("📊 평가 지표", class_="billx-panel-title"), ui.output_ui("apx_metrics_table"), ui.hr({"class": "soft"}), ui.output_ui("apx_residual_plot"), class_="billx-panel"),
+                    ui.div(ui.h5("🔍 설명가능성 (XAI)", class_="billx-panel-title"), ui.output_ui("apx_shap_summary"), ui.hr({"class": "soft"}), ui.output_ui("apx_shap_bar"), class_="billx-panel"),
                     col_widths=[6, 6],
                 ),
-                ui.card(
-                    ui.card_header("배포/모니터링 체크리스트"),
-                    ui.output_ui("apx_checklist"),
-                ),
+                ui.div(ui.h5("🚀 배포/모니터링 체크리스트", class_="billx-panel-title"), ui.output_ui("apx_checklist"), class_="billx-panel"),
             ),
-
-            # ========= 로그/추적 =========
-            ui.nav_panel(
-                "로그",
-                ui.card(
-                    ui.card_header("실험 로그"),
-                    ui.output_ui("apx_experiment_log"),
-                    ui.hr({"class": "soft"}),
-                    ui.div(
-                        ui.input_action_button("apx_btn_export_log", "로그 CSV 내보내기", class_="btn btn-outline-primary"),
-                    ),
-                ),
-            ),
-            id="apx_tabs"
+            id="apx_tabs",
         ),
     )
 
 
-# ─────────────────────────────────────────────
-# Appendix Server (자리표시자 렌더)
-# ─────────────────────────────────────────────
 def appendix_server(input, output, session):
-    # 아래는 전부 “틀”만. 이후 viz 모듈 연결 시 교체하면 됨.
     def _ph(text="여기에 표/그래프가 표시됩니다.", h=260):
-        return ui.div(text, class_="placeholder", style=f"height:{h}px;")
+        return ui.div(text, class_="placeholder d-flex align-items-center justify-content-center small-muted", style=f"height:{h}px; font-size: 0.98rem;")
 
-    @output 
+    # ===== 개요 =====
+    @output
     @render.ui
-    def apx_head_table():        return _ph("데이터 상위 미리보기", 220)
-    @output 
-    @render.ui
-    def apx_schema_table():      return _ph("데이터 사전 (컬럼명/타입/설명)", 280)
-    @output 
-    @render.ui
-    def apx_missing_summary():   return _ph("결측치 요약 테이블", 220)
-    @output 
-    @render.ui
-    def apx_outlier_summary():   return _ph("이상치(범위/룰/스코어) 요약", 220)
-    @output 
-    @render.ui
-    def apx_corr_heatmap():      return _ph("상관행렬 Heatmap", 360)
-    @output 
-    @render.ui
-    def apx_dist_plot():         return _ph("핵심 수치형 변수 분포", 360)
-    @output 
-    @render.ui
-    def apx_time_trend():        return _ph("시계열 트렌드(요금/사용량) 라인", 360)
+    def apx_schema_table():
+        return render_data_schema()
 
-    @output 
+    @output
     @render.ui
-    def apx_pipeline_text():     return _ph("전처리 파이프라인(의사코드/다이어그램)", 180)
-    @output 
-    @render.ui
-    def apx_feature_table():     return _ph("피처 목록/중요도/선정 근거", 260)
-    @output 
-    @render.ui
-    def apx_scaling_table():     return _ph("스케일링·인코딩 설정(표)", 220)
-    @output 
-    @render.ui
-    def apx_leakage_check():     return _ph("데이터 누수 체크리스트", 220)
+    def apx_head_table():
+        return render_data_head(report_df, n=10)
 
-    @output 
+    # ===== EDA Storyline (요약 텍스트 + 그래프) =====
+    @output
     @render.ui
-    def apx_leaderboard():       return _ph("모델 리더보드 (RMSE/MAE/R²/Latency)", 260)
-    @output 
-    @render.ui
-    def apx_model_params():      return _ph("최종 모델 하이퍼파라미터", 220)
-    @output 
-    @render.ui
-    def apx_train_curve():       return _ph("학습 곡선(Train)", 300)
-    @output 
-    @render.ui
-    def apx_val_curve():         return _ph("검증 곡선(Validation)", 300)
+    def apx_eda_storyline():
+        return render_eda_storyline_panels(report_df)
 
-    @output 
+    # ===== EDA 기타 시각화 =====
+    @output
     @render.ui
-    def apx_metrics_table():     return _ph("최종 평가 지표 표 (RMSE/MAE/R² 등)", 220)
-    @output 
-    @render.ui
-    def apx_residual_plot():     return _ph("Residual/에러분포", 300)
-    @output 
-    @render.ui
-    def apx_shap_summary():      return _ph("SHAP Summary Plot", 300)
-    @output 
-    @render.ui
-    def apx_shap_bar():          return _ph("상위 피처 영향 (SHAP Bar)", 260)
+    def apx_basic_stats():
+        return render_basic_stats(report_df)
 
-    @output 
+    @output
     @render.ui
-    def apx_checklist():         return _ph("배포/모니터링 체크리스트 (알람/드리프트/재학습)", 260)
+    def apx_missing_summary():
+        return render_missing_summary(report_df)
 
-    @output 
+    @output
     @render.ui
-    def apx_experiment_log():    return _ph("실험 로그 표 (실험ID/모델/파라미터/지표/시간)", 320)
+    def apx_outlier_summary():
+        return render_outlier_summary(report_df)
+
+    @output
+    @render.ui
+    def apx_dist_plot():
+        return plot_distribution(report_df)
+
+    @output
+    @render.ui
+    def apx_corr_heatmap():
+        return plot_correlation_heatmap(report_df)
+
+    @output
+    @render.ui
+    def apx_time_trend():
+        return plot_time_trend(report_df)
+
+    @output
+    @render.ui
+    def apx_hourly_pattern():
+        return plot_hourly_pattern(report_df)
+
+    @output
+    @render.ui
+    def apx_weekday_pattern():
+        return plot_weekday_pattern(report_df)
+
+    @output
+    @render.ui
+    def apx_worktype_dist():
+        return plot_worktype_distribution(report_df)
+
+    # ===== 전처리/모델링/결과 (플레이스홀더 포함) =====
+    @output
+    @render.ui
+    def apx_pipeline_accordion():
+        return render_pipeline_accordion()
+
+    @output
+    @render.ui
+    def apx_feature_summary():
+        return render_feature_summary()
+
+    @output
+    @render.ui
+    def apx_scaling_info():
+        return render_scaling_info()
+
+    @output
+    @render.ui
+    def apx_leakage_check():
+        return render_leakage_check()
+
+    @output
+    @render.ui
+    def apx_leaderboard():
+        return _ph("모델 리더보드 (RMSE/MAE/R²/Latency)", 260)
+
+    @output
+    @render.ui
+    def apx_model_params():
+        return _ph("최종 모델 하이퍼파라미터", 220)
+
+    @output
+    @render.ui
+    def apx_train_curve():
+        return _ph("학습 곡선(Train)", 300)
+
+    @output
+    @render.ui
+    def apx_val_curve():
+        return _ph("검증 곡선(Validation)", 300)
+
+    @output
+    @render.ui
+    def apx_metrics_table():
+        return _ph("최종 평가 지표 표 (RMSE/MAE/R² 등)", 220)
+
+    @output
+    @render.ui
+    def apx_residual_plot():
+        return _ph("Residual/에러분포", 300)
+
+    @output
+    @render.ui
+    def apx_shap_summary():
+        return _ph("SHAP Summary Plot", 300)
+
+    @output
+    @render.ui
+    def apx_shap_bar():
+        return _ph("상위 피처 영향 (SHAP Bar)", 260)
+
+    @output
+    @render.ui
+    def apx_checklist():
+        return _ph("배포/모니터링 체크리스트 (알람/드리프트/재학습)", 260)

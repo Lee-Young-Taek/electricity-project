@@ -1,0 +1,83 @@
+/* ==========================================================
+   App Theme — consolidated CSS (Report + Appendix)
+   Save as: www/app-theme.css
+   ========================================================== */
+:root {
+  --bg: #f6f8fb;
+  --panel: #fff;
+  --text: #1e293b;
+  --muted: #64748b;
+  --accent: #2563eb;
+  --border: #e2e8f0;
+  --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Noto Sans KR", system-ui, -apple-system, Segoe UI, Roboto,
+    sans-serif;
+}
+.small-muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+hr.soft {
+  border-color: var(--border);
+  margin: 8px 0 16px;
+  opacity: 0.9;
+}
+.btn-primary {
+  background-color: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+.billx {
+  margin-top: 6px;
+}
+.billx-ribbon {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #eaf2ff, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.billx-titlebox .billx-title {
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: 0.2px;
+  color: #0f172a;
+}
+.billx-titlebox .billx-sub {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+}
+.apx-header {
+  margin-bottom: 10px;
+}
+.billx-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+}
+.billx-panel-title {
+  font-weight: 800;
+  margin-bottom: 10px;
+  color: #0f172a;
+}
+.billx-panel-body {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+/* Plotly divs should not be clipped */
+.js-plotly-plot,
+.plotly-graph-div {
+  width: 100% !important;
+  overflow: visible !important;
+}
