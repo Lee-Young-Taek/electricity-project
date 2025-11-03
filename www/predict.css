@@ -1,0 +1,264 @@
+/* ========== Predict-only CSS (report 톤앤매너 맞춤) ========== */
+
+/* Tokens (report.css와 동일) */
+:root {
+  --bg: #f6f8fb;
+  --panel: #fff;
+  --text: #1e293b;
+  --muted: #64748b;
+  --accent: #2563eb;
+  --border: #e2e8f0;
+  --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+
+  --chip-bg: #eef3ff;
+  --chip-border: #cfe0ff;
+  --chip-text: #0f3b66;
+
+  --info-bg: #eaf6ff;
+  --info-border: #b5e0ff;
+  --info-text: #075985;
+
+  --warn-bg: #fff8e6;
+  --warn-border: #ffe1a3;
+  --warn-text: #92400e;
+
+  --succ-bg: #ecfdf5;
+  --succ-border: #bbf7d0;
+  --succ-text: #065f46;
+}
+
+/* Base */
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Noto Sans KR", system-ui, -apple-system, Segoe UI, Roboto,
+    sans-serif;
+}
+.small-muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+hr.soft {
+  border-color: var(--border);
+  margin: 8px 0 16px;
+  opacity: 0.9;
+}
+
+/* Buttons */
+.btn {
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 800;
+}
+.btn-primary {
+  background-color: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff;
+}
+.btn-outline {
+  background: #fff;
+  border: 1px solid var(--border) !important;
+  color: var(--text);
+}
+.pred-btn {
+  min-width: 68px;
+}
+
+/* ===== Header Ribbon ===== */
+.pred-ribbon {
+  display: grid;
+  grid-template-columns: 1fr auto auto; /* 좌: 타이틀 / 중: 시간칩 / 우: 상태칩+버튼 */
+  gap: 16px;
+  align-items: center;
+  padding: 18px 18px;
+  margin-top: 6px;
+  margin-bottom: 16px; /* 헤더와 다음 섹션 간격 */
+  background: linear-gradient(180deg, #eaf2ff, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.pred-titlebox .pred-title {
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: 0.2px;
+  color: #0f172a;
+  margin: 0;
+}
+.pred-titlebox .pred-sub {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+  margin-top: 2px;
+}
+.pred-center {
+  justify-self: center;
+}
+.pred-actions {
+  display: flex;
+  gap: 8px;
+  justify-self: end;
+  align-items: center;
+  min-width: 260px;
+}
+.pred-actions .btn {
+  min-width: 66px;
+}
+
+/* ===== Chips (pill) ===== */
+.pred-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--chip-border);
+  background: var(--chip-bg);
+  color: var(--chip-text);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* 시간칩 – 고정폭/숫자 고정폭 렌더링 */
+.pred-timebox {
+  width: 240px;
+  justify-content: space-between;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pred-timebox .pred-time-label {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 12px;
+}
+.pred-timebox .pred-time-value {
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 상태칩 – 기본 모양(상태별 색 분기는 아래 오버라이드에서 강화) */
+.pred-statusbox {
+  width: 240px;
+  justify-content: space-between;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: #fff;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* ===== Panels & Layout ===== */
+.pred-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+}
+.pred-panel + .pred-panel {
+  margin-top: 14px;
+}
+.pred-panel-title {
+  font-weight: 800;
+  margin-bottom: 10px;
+  color: #0f172a;
+}
+
+/* KPI */
+.kpi-row {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+.kpi {
+  flex: 1 1 220px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+.kpi .kpi-title {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.3px;
+}
+.kpi .kpi-value {
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.kpi .kpi-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Charts */
+.pred-stack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin-top: 20px;
+}
+.pred-chart {
+  padding: 6px 0;
+}
+
+/* Responsive */
+@media (max-width: 980px) {
+  .pred-ribbon {
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+  }
+  .pred-center,
+  .pred-actions {
+    justify-self: start;
+  }
+}
+
+/* ==========================================================
+   강제 가시성 오버라이드 (테마 충돌/우선순위/캐시 이슈까지 커버)
+   ========================================================== */
+.pred-ribbon .pred-actions .pred-statusbox {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 10px 14px !important;
+  width: 260px !important; /* 필요시 240~280 조절 */
+  justify-content: space-between !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--chip-border) !important;
+  background: #eef3ff !important; /* 기본(info)도 칩 톤으로 */
+  color: #0f3b66 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04) !important;
+}
+.pred-ribbon .pred-actions .pred-statusbox.pred-status--warn {
+  background: var(--warn-bg) !important;
+  border-color: var(--warn-border) !important;
+  color: var(--warn-text) !important;
+}
+.pred-ribbon .pred-actions .pred-statusbox.pred-status--success {
+  background: var(--succ-bg) !important;
+  border-color: var(--succ-border) !important;
+  color: var(--succ-text) !important;
+}
+.pred-ribbon .pred-actions .pred-statusbox .pred-time-label {
+  color: var(--muted) !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+}
+.pred-ribbon .pred-actions .pred-statusbox .pred-time-value {
+  font-weight: 800 !important;
+  letter-spacing: 0.2px !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* 혹시 남아있을 아이콘/점은 제거 */
+.pred-dot {
+  display: none !important;
+}

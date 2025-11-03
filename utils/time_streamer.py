@@ -1,27 +1,22 @@
+# utils/time_streamer.py
 import pandas as pd
 
 class RealTimeStreamer:
-    def __init__(self, data: pd.DataFrame):
-        self.full_data = data.reset_index(drop=True).copy()
-        self.current_index = 0
+    """DataFrame을 n행씩 순차 제공하는 간단 스트리머"""
+    def __init__(self, source: pd.DataFrame):
+        self.set_source(source)
 
-    def get_next_batch(self, batch_size: int = 1):
-        if self.current_index >= len(self.full_data):
-            return None
-        end_index = min(self.current_index + batch_size, len(self.full_data))
-        batch = self.full_data.iloc[self.current_index:end_index].copy()
-        self.current_index = end_index
-        return batch
-
-    def get_current_data(self):
-        if self.current_index == 0:
-            return pd.DataFrame()
-        return self.full_data.iloc[: self.current_index].copy()
+    def set_source(self, source: pd.DataFrame):
+        self._src = source.copy() if isinstance(source, pd.DataFrame) else pd.DataFrame()
+        self._i = 0
 
     def reset_stream(self):
-        self.current_index = 0
+        self._i = 0
 
-    def progress(self) -> float:
-        if len(self.full_data) == 0:
-            return 0.0
-        return (self.current_index / len(self.full_data)) * 100
+    def get_next_batch(self, n: int = 1) -> pd.DataFrame | None:
+        if self._src is None or self._src.empty or self._i >= len(self._src):
+            return None
+        j = min(self._i + n, len(self._src))
+        out = self._src.iloc[self._i:j].copy()
+        self._i = j
+        return out
