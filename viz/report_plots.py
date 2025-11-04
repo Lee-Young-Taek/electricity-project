@@ -112,15 +112,24 @@ def mom_bar_chart(monthly_df_all: pd.DataFrame, selected_ym: str) -> ui.Tag:
     return _fig_to_div(fig, "mom_bar_chart_div")
 
 
-
 def yearly_trend_chart(monthly_df_all: pd.DataFrame, selected_ym: str) -> ui.Tag:
     df = monthly_df_all.copy()
     if df.empty or "ym" not in df:
         return ui.div({"class": "placeholder"}, "데이터가 없습니다")
 
-    df = df[df["ym"].str.startswith("2024-")].copy()
+    # ⬇️ 여기만 수정: 선택한 연도의 접두어로 필터
+    try:
+        sel_year = int(str(selected_ym).split("-")[0])
+    except Exception:
+        sel_year = None
+
+    if sel_year is not None:
+        df = df[df["ym"].astype(str).str.startswith(f"{sel_year}-")].copy()
+    else:
+        df = df.iloc[0:0].copy()  # 연도 파싱 실패 시 빈 프레임
+
     if df.empty:
-        return ui.div({"class": "placeholder"}, "2024년 데이터가 없습니다")
+        return ui.div({"class": "placeholder"}, f"{sel_year}년 데이터가 없습니다")
 
     df["xdate"] = pd.to_datetime(df["ym"] + "-01")
     df = df.sort_values("xdate")
@@ -129,6 +138,7 @@ def yearly_trend_chart(monthly_df_all: pd.DataFrame, selected_ym: str) -> ui.Tag
     cost = df["전기요금(원)"].astype(float)
     kwh  = df["전력사용량(kWh)"].astype(float)
 
+    # --- 네가 지정해둔 컬러 그대로 사용 ---
     COST = "rgba(37,99,235,1)"
     COST_FADE = "rgba(37,99,235,0.35)"
     KWH = "rgba(16,185,129,1)"
@@ -152,7 +162,7 @@ def yearly_trend_chart(monthly_df_all: pd.DataFrame, selected_ym: str) -> ui.Tag
         legendgroup="kwh",
     )
 
-    # 선택 월 강조
+    # 선택 월 강조 (그대로)
     try:
         sel_date = pd.to_datetime(selected_ym + "-01")
         sel = df.loc[df["xdate"] == sel_date]
@@ -211,3 +221,4 @@ def yearly_trend_chart(monthly_df_all: pd.DataFrame, selected_ym: str) -> ui.Tag
     )
 
     return _fig_to_div(fig, "year_trend_chart_div")
+
