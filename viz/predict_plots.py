@@ -1,3 +1,4 @@
+# ============================ viz/stream_plot.py ============================
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -5,9 +6,9 @@ import plotly.graph_objects as go
 from uuid import uuid4
 
 # =========================
-# Dual-axis Plotly helpers (final):
+# Dual-axis Plotly helpers (visibility-safe startup + guide lines)
 # - Start X axis as LINEAR + fully hidden → never shows 2000 default
-# - On first data point: switch X axis to DATE + show (ticks/grid/line on)
+# - On first data point switch X axis to DATE and show ticks/grid/line
 # - Draw a vertical guide line at each point; keep only the latest N (window)
 # =========================
 
@@ -27,8 +28,8 @@ def make_dual_widget(
             template="simple_white",
             xaxis=dict(
                 title="측정일시",
-                type="linear",         # start as linear (not date/category)
-                visible=False,          # fully hidden until first point
+                type="linear",      # start hidden linear → no fake year 2000
+                visible=False,
                 showticklabels=False,
                 ticks="",
                 showgrid=False,
@@ -45,7 +46,7 @@ def make_dual_widget(
             title=title,
             height=height,
             uirevision=None,
-            shapes=(),  # vertical guide lines live here
+            shapes=(),  # vertical guide lines
         ),
     )
     return fig
@@ -74,14 +75,11 @@ def clear_dual_widget(fw: go.FigureWidget, *, title: str = "전력사용량·전
     fw.update_yaxes(autorange=True, range=None)
     if "yaxis2" in fw.layout:
         fw.layout["yaxis2"].update(autorange=True, range=None)
-    # remove all shapes (vertical lines)
     fw.layout.shapes = ()
     fw.layout.uirevision = str(uuid4())
 
 
 def _ensure_datetime(t: datetime) -> datetime:
-    """Best-effort convert to Python datetime."""
-    # pandas.Timestamp
     if hasattr(t, "to_pydatetime"):
         try:
             return t.to_pydatetime()
@@ -91,7 +89,6 @@ def _ensure_datetime(t: datetime) -> datetime:
 
 
 def _sync_vlines(fw: go.FigureWidget, xs: list[datetime], window_points: int, color: str = "rgba(0,0,0,0.08)"):
-    """Sync vertical guide lines with x values (paper-relative 0→1)."""
     keep = xs[-window_points:] if window_points and len(xs) > window_points else xs
     shapes = []
     for x in keep:
@@ -124,7 +121,6 @@ def append_point_keep_window_dual(
     if fw is None:
         return
 
-    # trace guard
     if len(fw.data) < 1:
         fw.add_scatter(x=[], y=[], mode="lines+markers", name="전력사용량(kWh)", yaxis="y")
     if len(fw.data) < 2:
@@ -137,26 +133,20 @@ def append_point_keep_window_dual(
 
     t = _ensure_datetime(t)
 
-    # sync x for both traces
     x1.append(t); x2.append(t)
     y1v.append(y1); y2v.append(y2)
 
-    # windowing
     if window_points and len(x1) > window_points:
         x1 = x1[-window_points:]; y1v = y1v[-window_points:]
         x2 = x2[-window_points:]; y2v = y2v[-window_points:]
 
-    # commit
     fw.data[0].x = x1; fw.data[0].y = y1v
     fw.data[1].x = x2; fw.data[1].y = y2v
 
-    # vertical guide lines synced with latest window
     _sync_vlines(fw, x1, window_points)
 
     n = len(x1)
-    # first point → flip to DATE axis & show with full ticks/grid/line
     if n == 1:
-        # small padded window to stabilize autorange
         lo = t - timedelta(minutes=1)
         hi = t + timedelta(minutes=1)
         fw.update_xaxes(
