@@ -1,0 +1,32 @@
+# --- Python bytecode & cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Common caches ---
+.cache/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Envs (로컬 가상환경) ---
+.venv/
+venv/
+env/
+
+# --- Build/Dist ---
+build/
+dist/
+*.egg-info/
+
+# --- IDE ---
+.vscode/
+.idea/
+
+# --- Project-specific caches ---
+# 모델/시뮬/임시 산출물 등 캐시 디렉터리 예시
+data/cache/
+data/tmp/
+models/cache/
+logs/
