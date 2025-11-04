@@ -1,49 +1,57 @@
-/* ===== Base spacing & typography ===== */
-:root {
+/* ================= appendix.css (scoped) =================
+   This file only styles elements inside .apx-scope to avoid conflicts
+   with report.css. Keep selectors prefixed by .apx-scope. */
+
+.apx-scope {
   --gap-y: 16px;
   --panel-radius: 12px;
-  --border: 1px solid #e5e7eb;
-  --muted: #6b7280;
+  --apx-border: 1px solid #e5e7eb;
+  --apx-muted: #6b7280;
 }
 
-* {
+.apx-scope *,
+.apx-scope *::before,
+.apx-scope *::after {
   box-sizing: border-box;
 }
-.billx-title {
+
+/* ===== Header ribbon ===== */
+.apx-scope .billx-ribbon {
+  padding: 14px 10px 8px;
+  background: linear-gradient(180deg, #eef3ff, #fff);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+.apx-scope .billx-title {
   margin: 0;
   font-weight: 700;
   letter-spacing: -0.2px;
 }
-.billx-sub {
+.apx-scope .billx-sub {
   color: #667085;
   font-size: 0.95rem;
 }
-
-/* ===== Ribbon / header ===== */
-.billx-ribbon {
-  padding: 14px 10px 8px;
-}
-.billx-titlebox {
+.apx-scope .billx-titlebox {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-/* ===== Panel ===== */
-.billx-panel {
+/* ===== Panels ===== */
+.apx-scope .billx-panel {
   background: #fff;
-  border: var(--border);
+  border: var(--apx-border);
   border-radius: var(--panel-radius);
   padding: 16px;
   margin-bottom: var(--gap-y);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
-.billx-panel-title {
+.apx-scope .billx-panel-title {
   margin: 0 0 10px;
-  font-weight: 600;
+  font-weight: 700;
+  color: #0f172a;
 }
-
-/* ===== Placeholders ===== */
-.placeholder {
+.apx-scope .placeholder {
   background: repeating-linear-gradient(
     45deg,
     #f9fafb,
@@ -55,72 +63,90 @@
   border-radius: 10px;
 }
 
-/* ===== Navset (card + pill) spacing ===== */
-.nav.nav-pills .nav-link {
+/* ===== Navset spacing overrides only in scope ===== */
+.apx-scope .nav.nav-pills .nav-link {
   padding: 8px 14px;
 }
-.card-body {
+.apx-scope .card-body {
   padding: 16px;
 }
 
 /* ===== Tables ===== */
-.table {
+.apx-scope .table {
   margin-bottom: 0;
 }
-.table th,
-.table td {
+.apx-scope .table th,
+.apx-scope .table td {
   vertical-align: middle;
 }
-.small-muted {
-  color: var(--muted);
+.apx-scope .small-muted {
+  color: var(--apx-muted);
   font-size: 0.92rem;
 }
 
 /* ===== Utilities ===== */
-.mt-0 {
+.apx-scope .mt-0 {
   margin-top: 0 !important;
 }
-.mb-0 {
+.apx-scope .mb-0 {
   margin-bottom: 0 !important;
 }
-.mt-1 {
+.apx-scope .mt-1 {
   margin-top: 0.25rem !important;
 }
-.mb-1 {
+.apx-scope .mb-1 {
   margin-bottom: 0.25rem !important;
 }
-.mt-2 {
+.apx-scope .mt-2 {
   margin-top: 0.5rem !important;
 }
-.mb-2 {
+.apx-scope .mb-2 {
   margin-bottom: 0.5rem !important;
 }
-.mt-3 {
+.apx-scope .mt-3 {
   margin-top: 1rem !important;
 }
-.mb-3 {
+.apx-scope .mb-3 {
   margin-bottom: 1rem !important;
 }
-.ms-1 {
+.apx-scope .ms-1 {
   margin-left: 0.25rem !important;
 }
-.ms-2 {
+.apx-scope .ms-2 {
   margin-left: 0.5rem !important;
 }
 
 /* ===== Plotly container fix (prevent overflow) ===== */
-.billx-panel .js-plotly-plot,
-.billx-panel .plotly-graph-div {
+.apx-scope .billx-panel .js-plotly-plot,
+.apx-scope .billx-panel .plotly-graph-div {
   width: 100% !important;
   max-width: 100%;
 }
 
+/* ===== Inputs inside appendix only ===== */
+.apx-scope .form-select,
+.apx-scope .form-check-input,
+.apx-scope .form-control {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+.apx-scope .form-check-inline {
+  margin-right: 12px;
+}
+
+/* ===== Soft hr only inside appendix ===== */
+.apx-scope hr.soft {
+  border-color: #e5e7eb;
+  margin: 8px 0 16px;
+  opacity: 0.9;
+}
+
 /* ===== Responsive tweaks ===== */
 @media (max-width: 992px) {
-  .billx-ribbon {
+  .apx-scope .billx-ribbon {
     padding: 12px 8px 6px;
   }
-  .billx-panel {
+  .apx-scope .billx-panel {
     padding: 14px;
   }
 }
