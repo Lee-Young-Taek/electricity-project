@@ -5,6 +5,7 @@ import datetime as dt, calendar, io, tempfile
 import pandas as pd
 from pathlib import Path
 import os
+import numpy as np
 
 from shared import report_df, TEMPLATE_PATH
 from viz.report_plots import mom_bar_chart, yearly_trend_chart
@@ -308,13 +309,21 @@ def report_ui():
                     class_="billx-panel",
                 ),
                 ui.div(
-                    ui.div(ui.span("월 달력 · 일일 요금", class_="billx-panel-title"),
-                           ui.input_radio_buttons("cal_metric", None, {"cost": "요금", "kwh": "사용량"},
-                                                  selected="cost", inline=True),
-                           class_="cal-metric-toggle"),
-                    ui.output_ui("month_calendar"),
-                    ui.div({"class": "small-muted mt-2"}, "※ 날짜 칸 수치는 선택 지표의 일일 합계입니다. ● = 월내 상위 10% 피크"),
-                    class_="billx-panel",
+                    ui.div(  # ← 헤더 행 (제목 좌, 라디오 우)
+                    ui.span("월 달력 · 일일 요금", class_="billx-panel-title"),
+                    ui.div(
+                        ui.input_radio_buttons(
+                            "cal_metric", None, {"cost": "요금", "kwh": "사용량"},
+                            selected="cost", inline=True
+                        ),
+                        style="margin-left:auto;"  # ← 오른쪽 끝으로 밀기
+                    ),
+                    style="display:flex;align-items:center;gap:12px;"  # ← 즉시 적용되는 인라인 Flex
+                ),
+                ui.output_ui("month_calendar"),
+                ui.div({"class": "small-muted mt-2"},
+                       "※ 날짜 칸 수치는 선택 지표의 일일 합계입니다. • = 월내 상위 10% 피크"),
+                class_="billx-panel",
                 ),
                 class_="billx-col",
             ),
@@ -551,58 +560,94 @@ def report_server(input, output, session):
     def month_calendar():
         ym = month_key()
         first, ndays, offset = _first_meta_from_str(ym)
+
+        # 지표 선택(요금/사용량)
         metric = input.cal_metric() if hasattr(input, "cal_metric") else "cost"
+        metric_col = NUM_COLS_COST if metric == "cost" else NUM_COLS_KWH
+        unit_label = "원" if metric == "cost" else " kWh"
+
+        # 일자별 합계(숫자형으로 강제) -----------------------------------------
         mdf = df_month()
-        if not mdf.empty:
-            g = mdf.groupby(mdf[COL_TS].dt.date)
-            daily_cost = g[NUM_COLS_COST].sum()
-            daily_kwh  = g[NUM_COLS_KWH].sum() if NUM_COLS_KWH in mdf else None
+        if not mdf.empty and (metric_col in mdf):
+            g = mdf.groupby(mdf[COL_TS].dt.date)[metric_col].sum()
+            s_disp = pd.to_numeric(g, errors="coerce")  # ← 숫자 보장
         else:
-            daily_cost, daily_kwh = pd.Series(dtype=float), None
-        s_disp = daily_cost if metric == "cost" else (daily_kwh if daily_kwh is not None else pd.Series(dtype=float))
-        try:
-            thresh = s_disp.quantile(0.9) if len(s_disp) else None
-        except Exception:
-            thresh = None
+            s_disp = pd.Series(dtype=float)
+
+        # 피크 임계값(상위 10%) — NaN 제거 후 계산 -----------------------------
+        vals = s_disp.dropna().values
+        thresh = float(np.nanpercentile(vals, 90)) if len(vals) else None
+
+        # 요금/사용량/단가 툴팁용(있으면 표시)
+        daily_cost = (mdf.groupby(mdf[COL_TS].dt.date)[NUM_COLS_COST].sum()
+                      if not mdf.empty and NUM_COLS_COST in mdf else pd.Series(dtype=float))
+        daily_kwh  = (mdf.groupby(mdf[COL_TS].dt.date)[NUM_COLS_KWH].sum()
+                      if not mdf.empty and NUM_COLS_KWH in mdf else pd.Series(dtype=float))
 
         header = ui.tags.div({"class": "cal-weekdays"}, *[ui.tags.div(x) for x in WEEK_LABELS])
+
         cells = []
         for _ in range(offset):
             cells.append(ui.tags.div({"class": "cal-cell empty"}))
 
-        weeks = calendar.monthcalendar(first.year, first.month)
         today = dt.date.today()
         for d in range(1, ndays + 1):
             date_obj = dt.date(first.year, first.month, d)
             col = (offset + (d - 1)) % 7
-            val = s_disp.get(date_obj, None)
-            txt = "—"
-            if isinstance(val, (int, float)) and pd.notna(val):
-                txt = f"{val:,.0f}" + ("원" if metric == "cost" else " kWh")
+
+            # 표시 값
+            val = s_disp.get(date_obj, np.nan)
+            txt = "—" if pd.isna(val) else (f"{val:,.0f}{unit_label}")
+
+            # 툴팁(요금/사용/단가)
+            tip_cost = daily_cost.get(date_obj, np.nan)
+            tip_kwh  = daily_kwh.get(date_obj, np.nan)
+            if pd.notna(tip_cost):
+                tooltip = f"{date_obj} · 요금 {tip_cost:,.0f}원"
+                if pd.notna(tip_kwh):
+                    tooltip += f" · 사용 {tip_kwh:,.0f} kWh"
+                    if tip_kwh != 0:
+                        tooltip += f" · 단가 {tip_cost/tip_kwh:,.1f} 원/kWh"
+            else:
+                tooltip = f"{date_obj}"
+
+            # 클래스
             classes = ["cal-cell"]
             if col == 0: classes.append("sun")
             if col == 6: classes.append("sat")
             if date_obj == today: classes.append("today")
-            if (thresh is not None) and isinstance(val, (int, float)) and pd.notna(val) and (val >= thresh):
-                classes.append("peak")
-            tip_cost = daily_cost.get(date_obj, None)
-            tip_kwh  = daily_kwh.get(date_obj, None) if daily_kwh is not None else None
-            tip_unit = (tip_cost / tip_kwh) if (tip_cost is not None and tip_kwh not in (None, 0)) else None
-            tooltip = f"{date_obj} · 요금 {tip_cost:,.0f}원" if isinstance(tip_cost, (int,float)) else f"{date_obj}"
-            if isinstance(tip_kwh, (int,float)):  tooltip += f" · 사용 {tip_kwh:,.0f} kWh"
-            if isinstance(tip_unit, (int,float)): tooltip += f" · 단가 {tip_unit:,.1f} 원/kWh"
-            cells.append(ui.tags.div({"class": " ".join(classes), "title": tooltip},
-                                     ui.tags.div(str(d), {"class": "date"}),
-                                     ui.tags.div(txt, {"class": "cost"})))
-        week_pills = []
-        for i, wk in enumerate(weeks, start=1):
-            day_objs = [dt.date(first.year, first.month, dd) for dd in wk if dd != 0]
-            tot = float(sum([s_disp.get(d, 0.0) for d in day_objs])) if len(day_objs) else 0.0
-            label = "원" if metric == "cost" else " kWh"
-            week_pills.append(ui.tags.span(f"W{i}: {tot:,.0f}{label}", class_="pill"))
+
+            # 피크 여부
+            is_peak = (thresh is not None) and pd.notna(val) and float(val) >= thresh
+
+            # 내용 구성(피크 점은 인라인 스타일로 강제 표시)
+            children = [
+                ui.tags.div(str(d), {"class": "date"}),
+                ui.tags.div(txt, {"class": "cost"}),
+            ]
+            if is_peak:
+                children.append(
+                    ui.tags.span(
+                        "",
+                        style=(
+                            "position:absolute;right:6px;top:6px;"
+                            "width:10px;height:10px;background:#ef4444;"
+                            "border:2px solid #fff;border-radius:999px;"
+                            "box-shadow:0 0 0 1px rgba(239,68,68,.6);display:inline-block;"
+                        ),
+                    )
+                )
+
+            cells.append(
+                ui.tags.div(
+                    {"class": " ".join(classes), "title": tooltip, "style": "position:relative;"},
+                    *children
+                )
+            )
+
         grid = ui.tags.div({"class": "cal-grid"}, *cells)
-        footer = ui.tags.div({"class": "cal-week-summary"}, *week_pills)
-        return ui.tags.div({"class": "billx-cal"}, header, grid, footer)
+        return ui.tags.div({"class": "billx-cal"}, header, grid)
+
 
     @output
     @render.ui
@@ -651,8 +696,8 @@ def report_server(input, output, session):
         prev_df = df_view[(df_view[COL_TS] >= prev_start) & (df_view[COL_TS] <= prev_end)]
         context, img1, img2 = _build_context_and_charts(ym, mdf, prev_df, monthly_df_all)
         doc = DocxTemplate(str(TEMPLATE_PATH))
-        context["graph1"] = InlineImage(doc, img1, width=Mm(100), height=Mm(55))
-        context["graph2"] = InlineImage(doc, img2, width=Mm(100), height=Mm(55))
+        context["graph1"] = InlineImage(doc, img1, width=Mm(100), height=Mm(60))
+        context["graph2"] = InlineImage(doc, img2, width=Mm(100), height=Mm(60))
         doc.render(context)
         word_path = tempfile.NamedTemporaryFile(suffix=".docx", delete=False).name
         doc.save(word_path)
@@ -693,7 +738,7 @@ def report_server(input, output, session):
         prev_df = df_view[(df_view[COL_TS] >= prev_start) & (df_view[COL_TS] <= prev_end)]
         context, img1, img2 = _build_context_and_charts(ym, mdf, prev_df, monthly_df_all)
         doc = DocxTemplate(str(TEMPLATE_PATH))
-        context["graph1"] = InlineImage(doc, img1, width=Mm(90), height=Mm(55))
+        context["graph1"] = InlineImage(doc, img1, width=Mm(90), height=Mm(50))
         context["graph2"] = InlineImage(doc, img2, width=Mm(90), height=Mm(50))
         doc.render(context)
         word_path = tempfile.NamedTemporaryFile(suffix=".docx", delete=False).name
