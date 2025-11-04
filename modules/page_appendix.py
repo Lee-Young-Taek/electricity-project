@@ -13,21 +13,18 @@ from viz.appendix_eda import (
     render_calendar_alignment_storyline,
     render_calendar_overlay,
     render_midnight_rollover_fix,
-    render_eda_storyline_panels,
+    render_eda_storyline_panels,   # ← 시계열 종합(월/일/시간/계절)만 남기고
     render_basic_stats,
     render_missing_summary,
     render_outlier_summary,
-    plot_distribution,
-    plot_correlation_heatmap,
-    plot_time_trend,
-    plot_hourly_pattern,
-    plot_weekday_pattern,
-    plot_worktype_distribution,
-    # 파생 피처 근거 분석
+    plot_distribution,             # ← 변수 분포
+    plot_correlation_heatmap,      # ← 상관
+    plot_worktype_distribution,    # ← 작업유형 분포
+    # 파생 피처 근거 (정리)
     render_lag_window_acf,
-    render_how_profile_stability,
-    render_holiday_peak_checks,
+    render_holiday_peak_checks,    # ← HoW 대신 피크시간대 영향
     render_unitprice_and_logtarget,
+    render_unitprice_box_by_worktype,  # ← (추가) 작업유형별 단가 박스플롯
 )
 
 # ---- Tab: 전처리
@@ -54,17 +51,10 @@ from viz.appendix_results import (
 )
 
 
-# NOTE: Wrap entire appendix in a unique scope to avoid CSS collisions.
-# - All custom classes already prefix with `billx-` and IDs with `apx_`.
-# - The `.apx-scope` wrapper isolates any descendant CSS rules you may add in appendix.css
-#   (e.g., by writing selectors like `.apx-scope .billx-panel { ... }`).
-
 def appendix_ui():
     return ui.page_fluid(
-        # Include stylesheet and a tiny scoping helper
         ui.tags.link(rel="stylesheet", href="appendix.css"),
         ui.tags.style("""
-        /* Optional minimal safe defaults inside the scope to avoid global overrides */
         .apx-scope { --apx-gap: 12px; }
         .apx-scope .billx-titlebox { margin-bottom: var(--apx-gap); }
         .apx-scope .billx-panel { background: #fff; border: 1px solid #e2e8f0; border-radius: .5rem; padding: 12px; }
@@ -72,7 +62,6 @@ def appendix_ui():
         .apx-scope .soft { opacity: .4; }
         """),
         ui.div(
-            # ===== Scope wrapper starts here =====
             ui.div(
                 ui.div(
                     ui.h4("데이터 부록 (Appendix)", class_="billx-title"),
@@ -167,29 +156,21 @@ def appendix_ui():
 
                     ui.hr({"class": "soft"}),
 
-                    # === 3. 시계열 패턴 ===
+                    # === 3. 시계열 패턴 (한 군데만) ===
                     ui.output_ui("apx_eda_storyline"),
 
                     ui.hr({"class": "soft"}),
 
-                    # === 4. 변수 분석 ===
+                    # === 4. 변수 분석 (겹침 제거: 시간/요일 그래프 삭제) ===
                     ui.div(ui.h5("변수 분석", class_="billx-panel-title"), class_="billx-panel"),
-
                     ui.layout_columns(
                         ui.div(ui.h5("변수 간 상관관계", class_="billx-panel-title"), ui.output_ui("apx_corr_heatmap"), class_="billx-panel"),
                         ui.div(ui.h5("주요 변수 분포", class_="billx-panel-title"), ui.output_ui("apx_dist_plot"), class_="billx-panel"),
                         col_widths=[6, 6],
                     ),
-
                     ui.layout_columns(
-                        ui.div(ui.h5("시간대별 패턴", class_="billx-panel-title"), ui.output_ui("apx_hourly_pattern"), class_="billx-panel"),
-                        ui.div(ui.h5("요일별 패턴", class_="billx-panel-title"), ui.output_ui("apx_weekday_pattern"), class_="billx-panel"),
-                        col_widths=[6, 6],
-                    ),
-
-                    ui.layout_columns(
-                        ui.div(ui.h5("시계열 추이", class_="billx-panel-title"), ui.output_ui("apx_time_trend"), class_="billx-panel"),
                         ui.div(ui.h5("작업유형별 분포", class_="billx-panel-title"), ui.output_ui("apx_worktype_dist"), class_="billx-panel"),
+                        ui.div(ui.h5("작업유형별 단가 분포", class_="billx-panel-title"), ui.output_ui("apx_unitprice_box"), class_="billx-panel"),
                         col_widths=[6, 6],
                     ),
 
@@ -198,21 +179,20 @@ def appendix_ui():
                     # === 5. 파생 피처 설계 근거 ===
                     ui.div(
                         ui.h5("파생 피처 설계 근거", class_="billx-panel-title"),
-                        ui.div("모델 성능 향상을 위한 파생 피처 설계의 통계적 타당성을 검증합니다.", class_="alert alert-info mb-0"),
+                        ui.div("시차/피크시간대·타겟 분포 근거를 중심으로, 모델링용 파생피처의 통계적 타당성을 제시합니다.", class_="alert alert-info mb-0"),
                         class_="billx-panel",
                     ),
 
+                    # ACF ↔ 피크시간대 영향
                     ui.layout_columns(
                         ui.div(ui.h5("시차 상관관계 (ACF)", class_="billx-panel-title"), ui.output_ui("apx_lag_acf"), class_="billx-panel"),
-                        ui.div(ui.h5("Hour of Week 안정성", class_="billx-panel-title"), ui.output_ui("apx_how_stability"), class_="billx-panel"),
+                        ui.div(ui.h5("피크시간대 영향", class_="billx-panel-title"), ui.output_ui("apx_holiday_peak"), class_="billx-panel"),
                         col_widths=[6, 6],
                     ),
 
-                    ui.layout_columns(
-                        ui.div(ui.h5("피크시간대 영향", class_="billx-panel-title"), ui.output_ui("apx_holiday_peak"), class_="billx-panel"),
-                        ui.div(ui.h5("단가 & 로그변환", class_="billx-panel-title"), ui.output_ui("apx_unitprice_log"), class_="billx-panel"),
-                        col_widths=[6, 6],
-                    ),
+                    # 단가 & 로그변환: 한 행 꽉 채움
+                    ui.div(ui.h5("단가 & 로그 타겟 분포", class_="billx-panel-title"), class_="billx-panel"),
+                    ui.div(ui.output_ui("apx_unitprice_log"), class_="billx-panel"),
                 ),
 
                 # ========= 전처리 =========
@@ -300,7 +280,7 @@ def appendix_ui():
                 ),
                 id="apx_tabs",
             ),
-            class_="apx-scope",  # <<======= CSS scope wrapper
+            class_="apx-scope",
         ),
     )
 
@@ -372,34 +352,19 @@ def appendix_server(input, output, session):
 
     @output
     @render.ui
-    def apx_time_trend():
-        return plot_time_trend(report_df)
-
-    @output
-    @render.ui
-    def apx_hourly_pattern():
-        return plot_hourly_pattern(report_df)
-
-    @output
-    @render.ui
-    def apx_weekday_pattern():
-        return plot_weekday_pattern(report_df)
-
-    @output
-    @render.ui
     def apx_worktype_dist():
         return plot_worktype_distribution(report_df)
 
-    # ---- 파생 피처 근거
+    @output
+    @render.ui
+    def apx_unitprice_box():
+        return render_unitprice_box_by_worktype(report_df)
+
+    # ---- 파생 피처 근거 (HoW 삭제 → 피크 영향)
     @output
     @render.ui
     def apx_lag_acf():
         return render_lag_window_acf(report_df)
-
-    @output
-    @render.ui
-    def apx_how_stability():
-        return render_how_profile_stability(report_df)
 
     @output
     @render.ui
