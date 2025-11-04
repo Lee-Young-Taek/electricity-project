@@ -1,3 +1,27 @@
-shiny
-seaborn
-pandas
+# ===================== Core =====================
+shiny>=0.8
+shinywidgets>=0.3
+
+# ===================== Data / Plot =====================
+pandas>=2.2
+numpy==1.26.4
+# Plotly 6.x는 서버에서 Chrome 필요 → 5.21.0 + kaleido 0.2.1로 고정(서버 친화)
+plotly==5.21.0
+kaleido==0.2.1
+seaborn>=0.13
+
+# ===================== Report (Word 템플릿) =====================
+docxtpl>=0.16
+python-docx>=0.8.11
+# InlineImage 등 이미지 처리 안전빵(권장)
+Pillow>=9.5
+
+# ===================== 배포용 서버 (옵션) =====================
+uvicorn[standard]>=0.30
+gunicorn>=21.2
+
+# ===================== OS별 선택 (옵션) =====================
+# 리눅스/맥에서는 Word가 없어 실패하므로 윈도우에서만 설치되도록 처리
+docx2pdf; sys_platform == "win32"
+reportlab>=4.2
+Pillow>=9.5
