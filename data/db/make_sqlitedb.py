@@ -1,61 +1,107 @@
-
-# convert_csv_to_sqlite_preserve_korean.py
+# csv_to_sqlite_power.py
 import sqlite3
 import pandas as pd
 from pathlib import Path
 
-CSV_PATH = "./data/test.csv"       # ⬅️ 네 CSV 경로
-DB_PATH  = "./data/db/data.sqlite"      # ⬅️ 만들 SQLite 파일(.sqlite)
-TABLE    = "test"                    # ⬅️ 테이블명(원하는 이름으로)
+# =========================
+# 경로/테이블 설정
+# =========================
+CSV_PATH = "./data/specific_columns_output.csv"   # ⬅️ CSV 경로
+DB_PATH  = "./data/db/data.sqlite"                # ⬅️ SQLite 파일 경로
+TABLE    = "submission"                           # ⬅️ 테이블명
 
-# 출력 폴더 확보
+# =========================
+# 스키마/인덱스 정의
+# =========================
+COLUMNS = [
+    ("id", "INTEGER"),
+    ("측정일시", "TEXT"),
+    ("전력사용량(kWh)", "REAL"),
+    ("작업유형", "TEXT"),
+    ("전기요금(원)", "REAL"),
+]
+INDEX_COLUMNS = ["측정일시", "작업유형"]
+
+# =========================
+# 출력 폴더 생성
+# =========================
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
-# 1) CSV 읽기 (BOM 이슈 대비해서 encoding 옵션은 상황 따라 조정)
-df = pd.read_csv(CSV_PATH, encoding="utf-8")
+# =========================
+# CSV 읽기 (인코딩 자동 판별)
+# =========================
+try:
+    df = pd.read_csv(CSV_PATH, encoding="utf-8")
+except UnicodeDecodeError:
+    df = pd.read_csv(CSV_PATH, encoding="utf-8-sig")
 
-# 2) 컬럼 존재 확인 (필요시 에러 메시지)
-required = ["id", "측정일시", "작업유형"]
-missing = [c for c in required if c not in df.columns]
+# 헤더 공백 정리
+df.rename(columns=lambda c: c.strip(), inplace=True)
+
+# =========================
+# 컬럼 리네임/값 매핑
+# - oof_kwh → 전력사용량(kWh)
+# - 작업유형: Light_Load/Medium_Load/Maximum_Load → 경부하/중간부하/최대부하
+# =========================
+df.rename(columns={"oof_kwh": "전력사용량(kWh)"}, inplace=True)
+
+worktype_map = {
+    "Light_Load": "경부하",
+    "Medium_Load": "중간부하",
+    "Maximum_Load": "최대부하",
+}
+if "작업유형" in df.columns:
+    df["작업유형"] = (
+        df["작업유형"]
+        .astype(str)
+        .str.strip()
+        .replace(worktype_map)
+    )
+
+# =========================
+# 필수 컬럼 확인
+# =========================
+expected_cols = [c[0] for c in COLUMNS]
+missing = [c for c in expected_cols if c not in df.columns]
 if missing:
     raise ValueError(f"CSV에 필요한 컬럼이 없습니다: {missing}")
 
-# 3) '측정일시'를 TEXT로 저장하기 위해 명시적으로 문자열화 (가공/파싱 X)
+# =========================
+# 타입 정리
+# =========================
 df["측정일시"] = df["측정일시"].astype(str)
-# 작업유형도 문자열로 고정(권장)
-df["작업유형"] = df["작업유형"].astype(str)
+df["전력사용량(kWh)"] = pd.to_numeric(df["전력사용량(kWh)"], errors="coerce")
+df["전기요금(원)"] = pd.to_numeric(df["전기요금(원)"], errors="coerce")
+df["id"] = pd.to_numeric(df["id"], errors="coerce")
 
-# 4) DB에 쓰기 (테이블 교체)
+# 스키마 순서로 정렬
+df = df[expected_cols]
+
+# =========================
+# DB 쓰기
+# =========================
+create_sql_cols = [f'"{name}" {typ}' for name, typ in COLUMNS]
+create_table_sql = f'''
+CREATE TABLE "{TABLE}" (
+    {", ".join(create_sql_cols)}
+)
+'''
+
 with sqlite3.connect(DB_PATH, timeout=30) as con:
-    # 잠금 대기 설정(락 충돌 줄이기)
     con.execute("PRAGMA busy_timeout=30000;")
+    con.execute("PRAGMA journal_mode=WAL;")
 
-    # 스키마를 TEXT로 명확히 고정 (id는 정수/문자 선택 가능: 여기선 정수)
-    con.execute(f'''
-        CREATE TABLE IF NOT EXISTS "{TABLE}" (
-            "id"        INTEGER,
-            "측정일시"  TEXT,
-            "작업유형"  TEXT
-        )
-    ''')
-
-    # 기존 테이블을 완전히 교체하고 싶으면 DROP 후 새로 생성
+    # 테이블 재생성
     con.execute(f'DROP TABLE IF EXISTS "{TABLE}"')
-    con.execute(f'''
-        CREATE TABLE "{TABLE}" (
-            "id"        INTEGER,
-            "측정일시"  TEXT,
-            "작업유형"  TEXT
-        )
-    ''')
+    con.execute(create_table_sql)
 
-    # pandas → SQLite (스키마를 우리가 만들었으니 그대로 append)
-    df[["id", "측정일시", "작업유형"]].to_sql(
-        TABLE, con, if_exists="append", index=False, chunksize=100_000, method="multi"
-    )
+    # 대량 INSERT
+    df.to_sql(TABLE, con, if_exists="append", index=False, chunksize=100_000, method="multi")
 
-    # 조회 최적화를 위한 인덱스(선택)
-    con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{TABLE}_측정일시" ON "{TABLE}"("측정일시");')
-    con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{TABLE}_작업유형" ON "{TABLE}"("작업유형");')
+    # 인덱스 생성
+    for col in INDEX_COLUMNS:
+        con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{TABLE}_{col}" ON "{TABLE}"("{col}");')
 
-print(f"✅ 완료: {DB_PATH} / 테이블 '{TABLE}' (컬럼명 그대로, 측정일시=TEXT)")
+print(f"✅ 완료: {DB_PATH} / 테이블 '{TABLE}' 로 적재")
+print(f"   - 총 행수: {len(df)}")
+print(f"   - 컬럼: {', '.join(expected_cols)}")

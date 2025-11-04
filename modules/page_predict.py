@@ -1,19 +1,21 @@
-# modules/page_predict.py
 from __future__ import annotations
 
 import pandas as pd
 from datetime import datetime
 from shiny import ui, render, reactive
 from shinywidgets import output_widget, render_plotly
-import plotly.graph_objects as go
 
 from utils.ui_components import kpi
-from viz.plot_placeholders import hourly_prediction
 from shared import df as reactive_db_df  # 최신 스냅샷(오래→최신 정렬 가정)
+from viz.predict_plots import (
+    make_dual_widget,
+    clear_dual_widget,
+    append_point_keep_window_dual,
+)
 
 # ===== 설정 =====
-STREAM_TICK_SEC = 3.0   # 초 단위: 1초마다 한 줄씩 소비
-WINDOW_POINTS   = 32    # 최근 30개 포인트만 그래프에 유지
+STREAM_TICK_SEC = 3.0   # 초 단위: 3초마다 한 줄씩 소비
+WINDOW_POINTS   = 32    # 최근 32개 포인트만 그래프에 유지
 
 
 # ========================
@@ -35,14 +37,14 @@ def predict_ui():
             ui.div(
                 ui.div(
                     ui.span("측정일시", class_="pred-time-label"),
-                    ui.span(ui.output_text("toolbar_time"), class_="pred-time-value"),
+                    ui.span(ui.output_text("pred_toolbar_time"), class_="pred-time-value"),
                     class_="pred-chip pred-timebox",
                 ),
                 class_="pred-center",
             ),
             # 우: 상태칩 + 컨트롤
             ui.div(
-                ui.output_ui("stream_notice"),
+                ui.output_ui("pred_stream_notice"),
                 ui.input_action_button("btn_start", "시작", class_="btn btn-primary pred-btn"),
                 ui.input_action_button("btn_stop",  "멈춤", class_="btn btn-outline pred-btn"),
                 ui.input_action_button("btn_reset", "리셋", class_="btn btn-outline pred-btn"),
@@ -55,34 +57,22 @@ def predict_ui():
         ui.div(
             ui.div("예측 지표", class_="pred-panel-title"),
             ui.div(
-                kpi("실시간 예측 사용량", "— kWh"),
-                kpi("실시간 예측 요금",   "— 원"),
-                kpi("누적 예측 요금",     "— 원"),
-                kpi("작업 유형",          ui.output_text("worktype_text")),
+                kpi("실시간 예측 사용량", ui.output_text("pred_kpi_kwh")),
+                kpi("실시간 예측 요금",   ui.output_text("pred_kpi_bill")),
+                kpi("누적 예측 요금",     ui.output_text("pred_kpi_cum_bill")),
+                kpi("작업 유형",          ui.output_text("pred_worktype_text")),
                 class_="kpi-row",
             ),
             class_="pred-panel",
         ),
 
-        # ===== 예시 차트 스택(자리용) =====
+        # ===== 실시간 Plotly: 최근 N개 포인트 (이중축) =====
         ui.div(
+            ui.div(f"전력사용량·전기요금 — 최근 {WINDOW_POINTS}개", class_="pred-panel-title"),
             ui.div(
-                ui.div("시간대별 요금 예측", class_="pred-panel-title"),
-                ui.div(hourly_prediction(), class_="pred-chart"),
-                class_="pred-panel",
+                output_widget("pred_ts_plot"),
+                style="width:100%;",
             ),
-            ui.div(
-                ui.div("예측 누적 사용량 비교", class_="pred-panel-title"),
-                ui.div(hourly_prediction(), class_="pred-chart"),
-                class_="pred-panel",
-            ),
-            class_="pred-stack",
-        ),
-
-        # ===== 실시간 Plotly: 최근 30개 포인트 =====
-        ui.div(
-            ui.div("최근 30개 이벤트 (측정일시당 y=1)", class_="pred-panel-title"),
-            output_widget("ts_plot"),
             class_="pred-panel",
         ),
     )
@@ -101,13 +91,18 @@ def predict_server(input, output, session):
     status_msg     = reactive.Value("대기 중")
     status_kind    = reactive.Value("info")         # info/warn/success
 
-    # ⭐ NEW: 리셋 시 그래프 위젯을 새로 만들기 위한 시드
+    # KPI 상태
+    kwh_now        = reactive.Value(None)
+    bill_now       = reactive.Value(None)
+    bill_cum       = reactive.Value(0.0)
+
+    # 🔸 하드 리셋용: plotly 위젯을 완전히 새로 마운트하기 위한 seed
     plot_seed      = reactive.Value(0)
 
     # ---------- 스냅샷 준비 ----------
     def _prepare_snapshot(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
-            return pd.DataFrame(columns=["id", "측정일시", "작업유형"])
+            return pd.DataFrame(columns=["id", "측정일시", "전력사용량(kWh)", "작업유형", "전기요금(원)"])
         snap = df.copy()
 
         # 정렬: id 우선, 없으면 측정일시
@@ -119,36 +114,21 @@ def predict_server(input, output, session):
         snap = snap.reset_index(drop=True)
 
         # 필수 컬럼 보정
-        for col in ["측정일시", "작업유형"]:
+        for col in ["측정일시", "전력사용량(kWh)", "작업유형", "전기요금(원)"]:
             if col not in snap.columns:
                 snap[col] = pd.NA
 
-        cols = ["측정일시", "작업유형"]
+        cols = ["측정일시", "전력사용량(kWh)", "작업유형", "전기요금(원)"]
         if "id" in snap.columns:
             cols = ["id"] + cols
         return snap[cols]
 
-    # ---------- Plotly Figure 생성 ----------
-    def make_event_widget(title: str) -> go.FigureWidget:
-        fig = go.FigureWidget(
-            data=[go.Scatter(x=[], y=[], mode="lines+markers", name="events")],
-            layout=go.Layout(
-                template="simple_white",
-                xaxis=dict(title="측정일시", tickangle=0),
-                yaxis=dict(title="count", range=[0, 1.2], fixedrange=True),
-                hovermode="x unified",
-                margin=dict(t=40, r=20, b=40, l=50),
-                title=title,
-            ),
-        )
-        return fig
-
-    # ⭐ NEW: plot_seed를 의존시켜, seed가 바뀌면 완전히 새 위젯 생성
+    # ---------- Plotly Figure 생성 (dual) ----------
     @output
     @render_plotly
-    def ts_plot():
-        _ = plot_seed()  # 의존성
-        return make_event_widget("Events over time (최근 30개)")
+    def pred_ts_plot():
+        _ = plot_seed()  # seed 의존 → 바뀌면 완전히 새 위젯 생성
+        return make_dual_widget(title=f"전력사용량·전기요금 — 최근 {WINDOW_POINTS}개", height=520)
 
     # ---------- 버튼 ----------
     @reactive.effect
@@ -166,6 +146,7 @@ def predict_server(input, output, session):
 
             source_df.set(snap)
             cursor_idx.set(0)
+            bill_cum.set(0.0)
 
             if snap.empty:
                 running.set(False)
@@ -197,41 +178,23 @@ def predict_server(input, output, session):
         status_msg.set("리셋됨 — 대기 중")
         status_kind.set("info")
         source_df.set(pd.DataFrame())  # 다음 시작 때 스냅샷 새로 읽게
+        kwh_now.set(None)
+        bill_now.set(None)
+        bill_cum.set(0.0)
 
-        # ⭐ NEW: 그래프 위젯 자체를 재생성(빈 그래프 보장)
+        # 그래프 위젯 자체를 리마운트 (겹침 방지의 확실한 방법)
         plot_seed.set(plot_seed() + 1)
 
-    # ---------- 포인트 1개 추가 + 최근 30개 유지 ----------
-    def _append_point_keep_window(fw: go.FigureWidget, t: datetime, v: float = 1.0):
-        if len(fw.data) == 0:
-            fw.add_scatter(x=[], y=[], mode="lines+markers", name="events")
-
-        x = list(fw.data[0].x or [])
-        y = list(fw.data[0].y or [])
-
-        x.append(t)
-        y.append(v)
-
-        if len(x) > WINDOW_POINTS:
-            x = x[-WINDOW_POINTS:]
-            y = y[-WINDOW_POINTS:]
-
-        # 데이터 갱신
-        fw.data[0].x = x
-        fw.data[0].y = y
-
-        # X축을 최근 구간으로 고정
+        # 혹시 남아있는 경우에도 안전망으로 클리어
         try:
-            xmin = x[0]
-            xmax = x[-1]
-            fw.update_xaxes(range=[xmin, xmax])
+            clear_dual_widget(pred_ts_plot.widget, title=f"전력사용량·전기요금 — 최근 {WINDOW_POINTS}개", autorange=True)
         except Exception:
             pass
 
-    # ---------- 틱 루프: 초당 1행 ----------
+    # ---------- 틱 루프 ----------
     @reactive.effect
     def _tick():
-        reactive.invalidate_later(STREAM_TICK_SEC)  # 초 단위!
+        reactive.invalidate_later(STREAM_TICK_SEC)
 
         if not running():
             return
@@ -248,6 +211,8 @@ def predict_server(input, output, session):
 
             row = snap.iloc[i]
             ts_raw = row.get("측정일시")
+            kwh    = row.get("전력사용량(kWh)")
+            bill   = row.get("전기요금(원)")
             wt     = str(row.get("작업유형", "—")) or "—"
 
             # KPI 업데이트용
@@ -258,13 +223,32 @@ def predict_server(input, output, session):
             )
             worktype_state.set(wt)
 
-            # 그래프에 점 1개 추가 (최근 30개 유지)
+            try:
+                kwh_val = float(kwh) if pd.notna(kwh) else None
+            except Exception:
+                kwh_val = None
+            try:
+                bill_val = float(bill) if pd.notna(bill) else None
+            except Exception:
+                bill_val = None
+
+            kwh_now.set(kwh_val)
+            bill_now.set(bill_val)
+            if bill_val is not None:
+                bill_cum.set(float(bill_cum()) + bill_val)
+
+            # 그래프에 점 1개 추가 (최근 WINDOW_POINTS개 유지)
             ts_for_plot = ts_parsed if pd.notna(ts_parsed) else datetime.now()
             try:
-                # ❗ seed가 바뀌면 widget 객체도 새로워지므로 매 틱마다 현재 widget 참조
-                fw = ts_plot.widget
+                fw = pred_ts_plot.widget
                 with fw.batch_animate():
-                    _append_point_keep_window(fw, ts_for_plot, 1.0)
+                    append_point_keep_window_dual(
+                        fw,
+                        t=ts_for_plot,
+                        y1=(kwh_val or 0.0),
+                        y2=(bill_val or 0.0),
+                        window_points=WINDOW_POINTS,
+                    )
             except Exception:
                 pass  # 다음 틱에서 자연 복구
 
@@ -274,7 +258,7 @@ def predict_server(input, output, session):
     # ---------- 출력 ----------
     @output
     @render.ui
-    def stream_notice():
+    def pred_stream_notice():
         kind = (status_kind() or "info").lower()
         text = status_msg() or "대기 중"
         cls = {
@@ -290,7 +274,7 @@ def predict_server(input, output, session):
 
     @output
     @render.text
-    def toolbar_time():
+    def pred_toolbar_time():
         ts = latest_ts()
         if hasattr(ts, "strftime"):
             return ts.strftime("%Y-%m-%d %H:%M:%S")
@@ -298,5 +282,23 @@ def predict_server(input, output, session):
 
     @output
     @render.text
-    def worktype_text():
+    def pred_worktype_text():
         return worktype_state() or "—"
+
+    @output
+    @render.text
+    def pred_kpi_kwh():
+        v = kwh_now()
+        return f"{v:,.4f} kWh" if v is not None else "— kWh"
+
+    @output
+    @render.text
+    def pred_kpi_bill():
+        v = bill_now()
+        return f"{v:,.2f} 원" if v is not None else "— 원"
+
+    @output
+    @render.text
+    def pred_kpi_cum_bill():
+        v = bill_cum()
+        return f"{v:,.0f} 원" if v is not None else "— 원"
