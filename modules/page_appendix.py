@@ -40,10 +40,8 @@ from viz.appendix_preproc import (
 
 # ---- Tab: 모델링
 from viz.appendix_modeling import (
-    render_leaderboard,
     render_model_params,
-    render_train_curve,
-    render_val_curve,
+    render_learning_curve,
 )
 
 # ---- Tab: 결과/검증
@@ -233,14 +231,60 @@ def appendix_ui():
                 ui.nav_panel(
                     "모델링",
                     ui.layout_columns(
-                        ui.div(ui.h5("실험 보드(Leaderboard)", class_="billx-panel-title"), ui.output_ui("apx_leaderboard"), ui.hr({"class": "soft"}), ui.div({"class": "small"}, "※ RMSE/MAE/R², 추론시간 등"), class_="billx-panel"),
-                        ui.div(ui.h5("최종 모델 파라미터", class_="billx-panel-title"), ui.output_ui("apx_model_params"), class_="billx-panel"),
+                        ui.TagList(
+                            ui.div(
+                                ui.h5("학습 전략", class_="billx-panel-title"),
+                                ui.tags.ul(
+                                    ui.tags.li("TimeSeriesSplit(3) → 마지막 폴드 검증"),
+                                    ui.tags.li("최신 시점 홀드아웃 유지"),
+                                ),
+                                class_="billx-panel"
+                            ),
+                            ui.div(
+                                ui.h5("모델 구성", class_="billx-panel-title"),
+                                ui.tags.ul(
+                                    ui.tags.li("LightGBM (Raw Target)"),
+                                    ui.tags.li("XGBoost (Log Target)"),
+                                    ui.tags.li("HistGradientBoostingRegressor (Log Target)"),
+                                    ui.tags.li("LightGBM (Log Target)")
+                                ),
+                                class_="billx-panel"
+                            ),
+                            ui.div(
+                                ui.h5("튜닝 방식", class_="billx-panel-title"),
+                                ui.tags.ul(
+                                    ui.tags.li("모델별 Random Search"),
+                                    ui.tags.li("최적 하이퍼파라미터 기록"),
+                                ),
+                                class_="billx-panel"
+                            ),
+                            ui.div(
+                                ui.h5("평가 기준", class_="billx-panel-title"),
+                                ui.tags.ul(
+                                    ui.tags.li("Holdout MAE (원 단위)")
+                                ),
+                                class_="billx-panel"
+                            ),
+                            ui.div(
+                                ui.h5("앙상블 전략", class_="billx-panel-title"),
+                                ui.tags.ul(
+                                    ui.tags.li("NNLS 가중치 추정"),
+                                    ui.tags.li("NNLS 성능이 단일 모델보다 낮으면 최고 단일 모델 사용")
+                                ),
+                                class_="billx-panel"
+                            ),
+                        ),
+                        ui.div(
+                            ui.h5("최종 모델 파라미터", class_="billx-panel-title"),
+                            ui.output_ui("apx_model_params"),
+                            class_="billx-panel"
+                        ),
                         col_widths=[7, 5],
                     ),
-                    ui.layout_columns(
-                        ui.div(ui.output_ui("apx_train_curve"), class_="billx-panel"),
-                        ui.div(ui.output_ui("apx_val_curve"), class_="billx-panel"),
-                        col_widths=[6, 6],
+                    ui.div(
+                        ui.h5("학습/검증 곡선", class_="billx-panel-title"),
+                        ui.output_ui("apx_learning_curve"),
+                        class_="billx-panel"
                     ),
                 ),
 
@@ -391,23 +435,13 @@ def appendix_server(input, output, session):
     # ---- 모델링
     @output
     @render.ui
-    def apx_leaderboard():
-        return render_leaderboard()
-
-    @output
-    @render.ui
     def apx_model_params():
         return render_model_params()
 
     @output
     @render.ui
-    def apx_train_curve():
-        return render_train_curve()
-
-    @output
-    @render.ui
-    def apx_val_curve():
-        return render_val_curve()
+    def apx_learning_curve():
+        return render_learning_curve()
 
     # ---- 결과/검증
     @output
