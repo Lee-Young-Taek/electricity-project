@@ -1,4 +1,4 @@
-# ============================ viz/appendix_eda.py (FINAL) ============================
+# ============================ viz/appendix_eda.py (CLEAN — no unitprice/log) ============================
 from __future__ import annotations
 
 import numpy as np
@@ -370,7 +370,6 @@ def render_basic_stats(df: pd.DataFrame):
     )
 
 
-
 def render_missing_summary(df: pd.DataFrame):
     m = pd.DataFrame({
         "컬럼": df.columns,
@@ -573,101 +572,6 @@ def plot_correlation_heatmap(df: pd.DataFrame):
     return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
 
 
-def plot_time_trend(df: pd.DataFrame):
-    d = df.copy()
-    d['측정일시'] = _to_dt(d['측정일시'])
-    dt2018 = _force_year_2018(d['측정일시'])
-    daily = pd.DataFrame({
-        '측정일시': dt2018.dt.date,
-        '전력사용량(kWh)': pd.to_numeric(d['전력사용량(kWh)'], errors='coerce'),
-        '전기요금(원)': pd.to_numeric(d['전기요금(원)'], errors='coerce'),
-    }).groupby('측정일시').sum().reset_index()
-
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    if '전력사용량(kWh)' in daily:
-        fig.add_scatter(
-            x=daily['측정일시'],
-            y=daily['전력사용량(kWh)'],
-            name='전력사용량(kWh)',
-            line=dict(color=_PALETTE["kwh_cur"], width=2),
-        )
-
-    if '전기요금(원)' in daily:
-        fig.add_scatter(
-            x=daily['측정일시'],
-            y=daily['전기요금(원)'],
-            name='전기요금(원)',
-            line=dict(color=_PALETTE["cost_cur"], width=2),
-            secondary_y=True,
-        )
-
-    fig.update_layout(
-        title='일별 전력사용량/전기요금 추이 (2018년 기준)',
-        height=420,
-        hovermode='x unified',
-        margin=dict(l=48, r=24, t=60, b=48),
-        paper_bgcolor='white',
-        plot_bgcolor='white',
-        font=dict(color=_PALETTE["font"])
-    )
-    fig.update_xaxes(title_text='날짜', gridcolor=_PALETTE["grid"]) 
-    fig.update_yaxes(title_text='전력사용량 (kWh)', secondary_y=False, gridcolor=_PALETTE["grid"]) 
-    fig.update_yaxes(title_text='전기요금 (원)', secondary_y=True)
-
-    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
-
-
-def plot_hourly_pattern(df: pd.DataFrame):
-    d = df.copy()
-    d['측정일시'] = _to_dt(d['측정일시'])
-    d['hour'] = d['측정일시'].dt.hour
-    hourly = d.groupby('hour')['전력사용량(kWh)'].mean().reset_index()
-
-    fig = go.Figure()
-    if not hourly.empty:
-        fig.add_scatter(
-            x=hourly['hour'],
-            y=hourly['전력사용량(kWh)'],
-            mode='lines+markers',
-            name='평균',
-            line=dict(color=_PALETTE["kwh_cur"], width=2),
-            marker=dict(size=8),
-        )
-
-    _apply_layout(fig, title='시간대별 평균 전력 사용량', height=420)
-    fig.update_xaxes(title_text='시간')
-    fig.update_yaxes(title_text='kWh')
-
-    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
-
-
-def plot_weekday_pattern(df: pd.DataFrame):
-    d = df.copy()
-    d['측정일시'] = _to_dt(d['측정일시'])
-    dt2018 = _force_year_2018(d['측정일시'])
-    d['weekday'] = dt2018.dt.dayofweek
-    names = ['월', '화', '수', '목', '금', '토', '일']
-    wk = d.groupby('weekday')['전력사용량(kWh)'].mean().reset_index()
-    wk['요일'] = wk['weekday'].map(lambda x: names[x])
-
-    fig = go.Figure()
-    if not wk.empty:
-        fig.add_bar(
-            x=wk['요일'],
-            y=wk['전력사용량(kWh)'],
-            text=wk['전력사용량(kWh)'].apply(lambda x: f"{x:.1f}"),
-            textposition='outside',
-            marker_color=_PALETTE["kwh_cur"],
-        )
-
-    _apply_layout(fig, title='요일별 평균 전력 사용량 (2018년 기준)', height=420)
-    fig.update_xaxes(title_text='요일')
-    fig.update_yaxes(title_text='kWh')
-
-    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
-
-
 def plot_worktype_distribution(df: pd.DataFrame):
     if '작업유형' not in df.columns:
         return ui.div('작업유형 컬럼 없음', class_='p-3 small-muted')
@@ -690,8 +594,57 @@ def plot_worktype_distribution(df: pd.DataFrame):
 
     return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
 
+
+def plot_worktype_hourly_panels(df: pd.DataFrame):
+    """작업유형 × 시간대 패턴(전력사용량, 전기요금) — 두 패널 한 번에 렌더링"""
+    need_cols = {"측정일시", "작업유형", "전력사용량(kWh)", "전기요금(원)"}
+    if not need_cols.issubset(df.columns):
+        return ui.div("필수 컬럼 부족", class_="p-3 small-muted")
+
+    d = df.copy()
+    d["측정일시"] = _to_dt(d["측정일시"])  # 안전 변환
+    d = d.dropna(subset=["측정일시"]).sort_values("측정일시")
+    d["hour"] = d["측정일시"].dt.hour
+
+    # 최신 카테고리명 가독성 정렬 (경부하/중간부하/최대부하 순)
+    order = ["경부하", "중간부하", "최대부하"]
+    if set(order).issubset(set(d["작업유형"].unique())):
+        d["작업유형"] = pd.Categorical(d["작업유형"], categories=order, ordered=True)
+
+    # 집계
+    g_kwh = d.groupby(["작업유형", "hour"])['전력사용량(kWh)'].mean().reset_index()
+    g_cost = d.groupby(["작업유형", "hour"])['전기요금(원)'].mean().reset_index()
+
+    # kWh 패널
+    fig1 = go.Figure()
+    for wt, sub in g_kwh.groupby("작업유형"):
+        fig1.add_scatter(
+            x=sub["hour"], y=sub['전력사용량(kWh)'], mode='lines+markers', name=str(wt),
+            line=dict(width=2), marker=dict(size=7)
+        )
+    _apply_layout(fig1, title="작업유형 × 시간대 평균 전력사용량(kWh)", height=420)
+    fig1.update_xaxes(title_text='시간')
+    fig1.update_yaxes(title_text='kWh')
+
+    # 요금 패널
+    fig2 = go.Figure()
+    for wt, sub in g_cost.groupby("작업유형"):
+        fig2.add_scatter(
+            x=sub["hour"], y=sub['전기요금(원)'], mode='lines+markers', name=str(wt),
+            line=dict(width=2), marker=dict(size=7)
+        )
+    _apply_layout(fig2, title="작업유형 × 시간대 평균 전기요금(원)", height=420)
+    fig2.update_xaxes(title_text='시간')
+    fig2.update_yaxes(title_text='원')
+
+    return ui.layout_columns(
+        ui.div(ui.HTML(fig1.to_html(include_plotlyjs='cdn', full_html=False)), class_=''),
+        ui.div(ui.HTML(fig2.to_html(include_plotlyjs='cdn', full_html=False)), class_=''),
+        col_widths=[6, 6]
+    )
+
 # ==========================================================
-# 5) 파생 피처 설계 근거 (요약 버전) — 품질 검증 섹션은 요청으로 삭제
+# 5) 파생 피처 설계 근거 (요약 버전) — 품질 검증 섹션은 요청으로 축약
 # ==========================================================
 
 def render_lag_window_acf(df: pd.DataFrame):
@@ -727,36 +680,6 @@ def render_lag_window_acf(df: pd.DataFrame):
     return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
 
 
-def render_how_profile_stability(df: pd.DataFrame):
-    need = ["측정일시", "hour_of_week", "전력사용량(kWh)"]
-    if not all(c in df.columns for c in need):
-        return ui.div(
-            ui.div(
-                ui.h6("Hour of Week 프로필 안정성"),
-                ui.div("hour_of_week 컬럼이 생성되면 주차별 패턴 안정성을 확인할 수 있습니다.", class_="small text-muted"),
-                class_="p-3",
-            ),
-            class_="billx-panel",
-        )
-
-    d = df.copy()
-    d["측정일시"] = _to_dt(d["측정일시"])
-    d["week"] = d["측정일시"].dt.isocalendar().week.astype(int)
-
-    gr = d.groupby(["week", "hour_of_week"])['전력사용량(kWh)'].mean().unstack(0)
-    std_by_how = gr.std(axis=1, skipna=True)
-
-    fig = go.Figure()
-    if not std_by_how.dropna().empty:
-        fig.add_histogram(x=std_by_how.fillna(0.0).values, nbinsx=40, marker_color=_PALETTE["accent"]) 
-
-    _apply_layout(fig, title="Hour of Week 패턴 안정성 (표준편차 분포)", height=360)
-    fig.update_xaxes(title_text="주차간 표준편차")
-    fig.update_yaxes(title_text="빈도")
-
-    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
-
-
 def render_holiday_peak_checks(df: pd.DataFrame):
     if "측정일시" not in df.columns or "전력사용량(kWh)" not in df.columns:
         return ui.div("필수 컬럼 부족", class_="p-3 small-muted")
@@ -788,27 +711,3 @@ def render_holiday_peak_checks(df: pd.DataFrame):
         </div>
         """
     )
-
-
-def render_unitprice_and_logtarget(df: pd.DataFrame):
-    need = ["전기요금(원)", "전력사용량(kWh)"]
-    if not all(c in df.columns for c in need):
-        return ui.div("필수 컬럼 부족", class_="p-3 small-muted")
-
-    d = df.copy()
-    d["unit_price"] = pd.to_numeric(d["전기요금(원)"], errors='coerce') / (pd.to_numeric(d["전력사용량(kWh)"], errors='coerce') + 1e-6)
-
-    fig = make_subplots(rows=1, cols=2, subplot_titles=("시간대별 단가 중앙값", "타겟 로그 변환 효과"))
-
-    if "측정일시" in d.columns:
-        d["hour"] = _to_dt(d["측정일시"]).dt.hour
-        med = d.groupby("hour")["unit_price"].median().reset_index()
-        fig.add_scatter(x=med["hour"], y=med["unit_price"], mode="lines+markers", name="단가 중앙값",
-                        line=dict(color=_PALETTE["cost_cur"], width=2), row=1, col=1)
-
-    y = pd.to_numeric(d["전기요금(원)"], errors='coerce').clip(lower=0)
-    fig.add_histogram(x=y, nbinsx=50, name="원본", row=1, col=2, marker_color=_PALETTE["cost_prev"]) 
-    fig.add_histogram(x=np.log1p(y), nbinsx=50, name="log1p", row=1, col=2, marker_color=_PALETTE["cost_cur"]) 
-
-    _apply_layout(fig, title="단가 추정 & 로그 타겟 분포", height=380)
-    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))

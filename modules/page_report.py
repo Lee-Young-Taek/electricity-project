@@ -5,6 +5,7 @@ import datetime as dt, calendar, io, tempfile
 import pandas as pd
 from pathlib import Path
 import os
+import numpy as np
 
 from shared import report_df, TEMPLATE_PATH
 from viz.report_plots import mom_bar_chart, yearly_trend_chart
@@ -55,98 +56,7 @@ def _ym_to_year_month(ym: str) -> tuple[int, int]:
     y, m = ym.split("-")
     return int(y), int(m)
 
-# ===== PDF 대체 경로 (Word/LibreOffice 미설치 대응) =====
-def _try_msword_pdf(docx_path: str) -> bytes | None:
-    try:
-        import win32com.client  # pywin32
-        wdFormatPDF = 17
-        pdf_path = str(Path(docx_path).with_suffix(".pdf"))
-        word = win32com.client.DispatchEx("Word.Application")
-        word.Visible = False
-        doc = word.Documents.Open(docx_path)
-        try:
-            doc.ExportAsFixedFormat(pdf_path, wdFormatPDF)
-        except Exception:
-            doc.SaveAs(pdf_path, FileFormat=wdFormatPDF)
-        finally:
-            doc.Close(False); word.Quit()
-        with open(pdf_path, "rb") as f:
-            data = f.read()
-        Path(pdf_path).unlink(missing_ok=True)
-        return data
-    except Exception:
-        return None
-
-def _try_docx2pdf(docx_path: str) -> bytes | None:
-    try:
-        from docx2pdf import convert
-        pdf_path = str(Path(docx_path).with_suffix(".pdf"))
-        convert(docx_path, pdf_path)
-        with open(pdf_path, "rb") as f:
-            data = f.read()
-        Path(pdf_path).unlink(missing_ok=True)
-        return data
-    except Exception:
-        return None
-
-def _try_reportlab_pdf(context: dict, img1: str|None=None, img2: str|None=None) -> bytes|None:
-    try:
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.units import mm
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-        try:
-            malgun = r"C:\Windows\Fonts\malgun.ttf"
-            if os.path.exists(malgun):
-                pdfmetrics.registerFont(TTFont("Malgun", malgun)); FONT = "Malgun"
-            else:
-                FONT = "Helvetica"
-        except Exception:
-            FONT = "Helvetica"
-        buf = io.BytesIO()
-        c = canvas.Canvas(buf, pagesize=A4)
-        W, H = A4
-
-        c.setFont(FONT, 18); c.drawString(25*mm, H-25*mm, "전기요금 분석 고지서")
-        c.setFont(FONT, 11)
-        c.drawString(25*mm, H-33*mm, f"발행일: {context.get('generation_date', dt.datetime.now().strftime('%Y-%m-%d'))}")
-        c.drawString(25*mm, H-40*mm, f"청구월: {context.get('billing_month','--')}월  ·  기간: {context.get('usage_period','--')}")
-
-        y0 = H - 55*mm; line_h = 7.2*mm
-        kvs = [
-            ("총 전기요금(원)", context.get("total_cost", "-")),
-            ("총 전력사용량(kWh)", context.get("current_usage", "-")),
-            ("전월 전기요금(원)", context.get("previous_total_cost", "-")),
-            ("전월 전력사용량(kWh)", context.get("previous_usage", "-")),
-            ("최대 일일 요금(원)", context.get("max_daily_cost", "-")),
-            ("총 탄소배출량(tCO₂)", context.get("total_co2", "-")),
-        ]
-        c.setFont(FONT, 12); c.drawString(25*mm, y0+6*mm, "요약")
-        c.setFont(FONT, 10)
-        for i, (k,v) in enumerate(kvs):
-            c.drawString(25*mm, y0 - i*line_h, f"• {k}: {v}")
-
-        img_w, img_h = 80*mm, 45*mm
-        xL, xR = 25*mm, 110*mm
-        y_img_top = y0 - len(kvs)*line_h - 10*mm
-        if img1 and os.path.exists(img1):
-            c.drawImage(img1, xL,  y_img_top - img_h, width=img_w, height=img_h, preserveAspectRatio=True, anchor='nw')
-        if img2 and os.path.exists(img2):
-            c.drawImage(img2, xR,  y_img_top - img_h, width=img_w, height=img_h, preserveAspectRatio=True, anchor='nw')
-
-        c.setFont(FONT, 8); c.drawString(25*mm, 12*mm, "※ 본 문서는 공장 전력 데이터 기반 자동 생성 요약본입니다.")
-        c.showPage(); c.save()
-        return buf.getvalue()
-    except Exception:
-        return None
-
-def convert_to_pdf_without_libreoffice(docx_path: str, context: dict, img1: str|None, img2: str|None) -> bytes|None:
-    for fn in (_try_msword_pdf, _try_docx2pdf):
-        data = fn(docx_path)
-        if data: return data
-    data = _try_reportlab_pdf(context, img1, img2)
-    return data
+# ===================== 컨텍스트/차트 빌드 =====================
 
 def _build_context_and_charts(ym: str, mdf: pd.DataFrame, prev_df: pd.DataFrame, monthly_df_all: pd.DataFrame) -> tuple[dict, str, str]:
     y, m = _ym_to_year_month(ym)
@@ -195,7 +105,7 @@ def _build_context_and_charts(ym: str, mdf: pd.DataFrame, prev_df: pd.DataFrame,
     fig_mom.update_xaxes(range=[0, max_kwh * 1.12], automargin=True)
     fig_mom.update_yaxes(automargin=True)
 
-    # Graph 2: 2018년(표시연도) 추이
+    # Graph 2: 2018년(표시연도) 추이 — 이중축(좌: 요금 / 우: 사용량)
     ms = monthly_df_all.sort_values("ym")
     fig_year = go.Figure()
     fig_year.add_trace(go.Scatter(x=ms["ym"], y=ms[NUM_COLS_COST], mode='lines+markers', name='전기요금(원)', yaxis='y',
@@ -211,6 +121,7 @@ def _build_context_and_charts(ym: str, mdf: pd.DataFrame, prev_df: pd.DataFrame,
 
     img1 = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
     img2 = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+    # 참고: kaleido 필요 (pip install -U kaleido)
     fig_mom.write_image(img1, width=480, height=240, scale=2)
     fig_year.write_image(img2, width=900, height=350, scale=2)
 
@@ -308,12 +219,20 @@ def report_ui():
                     class_="billx-panel",
                 ),
                 ui.div(
-                    ui.div(ui.span("월 달력 · 일일 요금", class_="billx-panel-title"),
-                           ui.input_radio_buttons("cal_metric", None, {"cost": "요금", "kwh": "사용량"},
-                                                  selected="cost", inline=True),
-                           class_="cal-metric-toggle"),
+                    ui.div(  # ← 헤더 행 (제목 좌, 라디오 우)
+                        ui.span("월 달력 · 일일 요금", class_="billx-panel-title"),
+                        ui.div(
+                            ui.input_radio_buttons(
+                                "cal_metric", None, {"cost": "요금", "kwh": "사용량"},
+                                selected="cost", inline=True
+                            ),
+                            style="margin-left:auto;"
+                        ),
+                        style="display:flex;align-items:center;gap:12px;"
+                    ),
                     ui.output_ui("month_calendar"),
-                    ui.div({"class": "small-muted mt-2"}, "※ 날짜 칸 수치는 선택 지표의 일일 합계입니다. ● = 월내 상위 10% 피크"),
+                    ui.div({"class": "small-muted mt-2"},
+                           "※ 날짜 칸 수치는 선택 지표의 일일 합계입니다. • = 월내 상위 10% 피크"),
                     class_="billx-panel",
                 ),
                 class_="billx-col",
@@ -338,9 +257,11 @@ def report_ui():
         ui.div(
             ui.div(
                 ui.span(ui.output_text("issue_info"), class_="billx-issue"),
-                ui.div(ui.download_button("btn_export_pdf", "PDF 저장", class_="btn btn-primary"),
-                       ui.download_button("btn_export_csv", "CSV 내보내기", class_="btn btn-outline-primary"),
-                       class_="billx-actions"),
+                ui.div(
+                    ui.download_button("btn_export_docx", "Word 저장(DOCX)", class_="btn btn-primary"),
+                    ui.download_button("btn_export_csv", "CSV 내보내기", class_="btn btn-outline-primary"),
+                    class_="billx-actions"
+                ),
                 class_="billx-footer-inner",
             ),
             class_="billx-footer",
@@ -551,58 +472,89 @@ def report_server(input, output, session):
     def month_calendar():
         ym = month_key()
         first, ndays, offset = _first_meta_from_str(ym)
+
+        # 지표 선택(요금/사용량)
         metric = input.cal_metric() if hasattr(input, "cal_metric") else "cost"
+        metric_col = NUM_COLS_COST if metric == "cost" else NUM_COLS_KWH
+        unit_label = "원" if metric == "cost" else " kWh"
+
+        # 일자별 합계(숫자형으로 강제)
         mdf = df_month()
-        if not mdf.empty:
-            g = mdf.groupby(mdf[COL_TS].dt.date)
-            daily_cost = g[NUM_COLS_COST].sum()
-            daily_kwh  = g[NUM_COLS_KWH].sum() if NUM_COLS_KWH in mdf else None
+        if not mdf.empty and (metric_col in mdf):
+            g = mdf.groupby(mdf[COL_TS].dt.date)[metric_col].sum()
+            s_disp = pd.to_numeric(g, errors="coerce")
         else:
-            daily_cost, daily_kwh = pd.Series(dtype=float), None
-        s_disp = daily_cost if metric == "cost" else (daily_kwh if daily_kwh is not None else pd.Series(dtype=float))
-        try:
-            thresh = s_disp.quantile(0.9) if len(s_disp) else None
-        except Exception:
-            thresh = None
+            s_disp = pd.Series(dtype=float)
+
+        # 피크 임계값(상위 10%)
+        vals = s_disp.dropna().values
+        thresh = float(np.nanpercentile(vals, 90)) if len(vals) else None
+
+        # 툴팁용
+        daily_cost = (mdf.groupby(mdf[COL_TS].dt.date)[NUM_COLS_COST].sum()
+                      if not mdf.empty and NUM_COLS_COST in mdf else pd.Series(dtype=float))
+        daily_kwh  = (mdf.groupby(mdf[COL_TS].dt.date)[NUM_COLS_KWH].sum()
+                      if not mdf.empty and NUM_COLS_KWH in mdf else pd.Series(dtype=float))
 
         header = ui.tags.div({"class": "cal-weekdays"}, *[ui.tags.div(x) for x in WEEK_LABELS])
         cells = []
         for _ in range(offset):
             cells.append(ui.tags.div({"class": "cal-cell empty"}))
 
-        weeks = calendar.monthcalendar(first.year, first.month)
         today = dt.date.today()
         for d in range(1, ndays + 1):
             date_obj = dt.date(first.year, first.month, d)
             col = (offset + (d - 1)) % 7
-            val = s_disp.get(date_obj, None)
-            txt = "—"
-            if isinstance(val, (int, float)) and pd.notna(val):
-                txt = f"{val:,.0f}" + ("원" if metric == "cost" else " kWh")
+
+            # 표시 값
+            val = s_disp.get(date_obj, np.nan)
+            txt = "—" if pd.isna(val) else (f"{val:,.0f}{unit_label}")
+
+            # 툴팁
+            tip_cost = daily_cost.get(date_obj, np.nan)
+            tip_kwh  = daily_kwh.get(date_obj, np.nan)
+            if pd.notna(tip_cost):
+                tooltip = f"{date_obj} · 요금 {tip_cost:,.0f}원"
+                if pd.notna(tip_kwh):
+                    tooltip += f" · 사용 {tip_kwh:,.0f} kWh"
+                    if tip_kwh != 0:
+                        tooltip += f" · 단가 {tip_cost/tip_kwh:,.1f} 원/kWh"
+            else:
+                tooltip = f"{date_obj}"
+
             classes = ["cal-cell"]
             if col == 0: classes.append("sun")
             if col == 6: classes.append("sat")
             if date_obj == today: classes.append("today")
-            if (thresh is not None) and isinstance(val, (int, float)) and pd.notna(val) and (val >= thresh):
-                classes.append("peak")
-            tip_cost = daily_cost.get(date_obj, None)
-            tip_kwh  = daily_kwh.get(date_obj, None) if daily_kwh is not None else None
-            tip_unit = (tip_cost / tip_kwh) if (tip_cost is not None and tip_kwh not in (None, 0)) else None
-            tooltip = f"{date_obj} · 요금 {tip_cost:,.0f}원" if isinstance(tip_cost, (int,float)) else f"{date_obj}"
-            if isinstance(tip_kwh, (int,float)):  tooltip += f" · 사용 {tip_kwh:,.0f} kWh"
-            if isinstance(tip_unit, (int,float)): tooltip += f" · 단가 {tip_unit:,.1f} 원/kWh"
-            cells.append(ui.tags.div({"class": " ".join(classes), "title": tooltip},
-                                     ui.tags.div(str(d), {"class": "date"}),
-                                     ui.tags.div(txt, {"class": "cost"})))
-        week_pills = []
-        for i, wk in enumerate(weeks, start=1):
-            day_objs = [dt.date(first.year, first.month, dd) for dd in wk if dd != 0]
-            tot = float(sum([s_disp.get(d, 0.0) for d in day_objs])) if len(day_objs) else 0.0
-            label = "원" if metric == "cost" else " kWh"
-            week_pills.append(ui.tags.span(f"W{i}: {tot:,.0f}{label}", class_="pill"))
+
+            is_peak = (thresh is not None) and pd.notna(val) and float(val) >= thresh
+
+            children = [
+                ui.tags.div(str(d), {"class": "date"}),
+                ui.tags.div(txt, {"class": "cost"}),
+            ]
+            if is_peak:
+                children.append(
+                    ui.tags.span(
+                        "",
+                        style=(
+                            "position:absolute;right:6px;top:6px;"
+                            "width:10px;height:10px;background:#ef4444;"
+                            "border:2px solid #fff;border-radius:999px;"
+                            "box-shadow:0 0 0 1px rgba(239,68,68,.6);display:inline-block;"
+                        ),
+                    )
+                )
+
+            cells.append(
+                ui.tags.div(
+                    {"class": " ".join(classes), "title": tooltip, "style": "position:relative;"},
+                    *children
+                )
+            )
+
         grid = ui.tags.div({"class": "cal-grid"}, *cells)
-        footer = ui.tags.div({"class": "cal-week-summary"}, *week_pills)
-        return ui.tags.div({"class": "billx-cal"}, header, grid, footer)
+        return ui.tags.div({"class": "billx-cal"}, header, grid)
 
     @output
     @render.ui
@@ -635,7 +587,7 @@ def report_server(input, output, session):
         kg = float(mdf["탄소배출량(tCO2)"].sum() * 1000.0)
         return f"{(kg / days):,.1f}"
 
-    # ===================== 다운로드 =====================
+    # ===================== 다운로드 (DOCX / CSV) =====================
 
     @output
     @render.download(
@@ -651,15 +603,20 @@ def report_server(input, output, session):
         prev_df = df_view[(df_view[COL_TS] >= prev_start) & (df_view[COL_TS] <= prev_end)]
         context, img1, img2 = _build_context_and_charts(ym, mdf, prev_df, monthly_df_all)
         doc = DocxTemplate(str(TEMPLATE_PATH))
-        context["graph1"] = InlineImage(doc, img1, width=Mm(100), height=Mm(55))
-        context["graph2"] = InlineImage(doc, img2, width=Mm(100), height=Mm(55))
+        # 템플릿의 {{graph1}}, {{graph2}} 위치에 삽입
+        context["graph1"] = InlineImage(doc, img1, width=Mm(100), height=Mm(60))
+        context["graph2"] = InlineImage(doc, img2, width=Mm(100), height=Mm(60))
         doc.render(context)
         word_path = tempfile.NamedTemporaryFile(suffix=".docx", delete=False).name
-        doc.save(word_path)
-        with open(word_path, "rb") as f:
-            data = f.read()
-        Path(word_path).unlink(missing_ok=True); Path(img1).unlink(missing_ok=True); Path(img2).unlink(missing_ok=True)
-        return io.BytesIO(data)
+        try:
+            doc.save(word_path)
+            with open(word_path, "rb") as f:
+                data = f.read()
+            return io.BytesIO(data)
+        finally:
+            Path(word_path).unlink(missing_ok=True)
+            Path(img1).unlink(missing_ok=True)
+            Path(img2).unlink(missing_ok=True)
 
     @output
     @render.download(
@@ -676,32 +633,3 @@ def report_server(input, output, session):
         except Exception:
             csv_bytes = mdf.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
         return io.BytesIO(csv_bytes)
-
-    @output
-    @render.download(
-        filename=lambda: f"전기요금청구서_{month_key()}.pdf",
-        media_type="application/pdf",
-    )
-    def btn_export_pdf():
-        if not _DOCXTPL_OK:
-            raise RuntimeError("docxtpl 라이브러리가 설치되지 않았습니다.")
-        ym = month_key(); y, m = _ym_to_year_month(ym)
-        mdf = df_month()
-        if mdf.empty: raise ValueError(f"{ym} 데이터가 없습니다.")
-        prev_start = (pd.to_datetime(f"{ym}-01") - pd.offsets.MonthEnd(1)).replace(day=1)
-        prev_end = prev_start + pd.offsets.MonthEnd(0)
-        prev_df = df_view[(df_view[COL_TS] >= prev_start) & (df_view[COL_TS] <= prev_end)]
-        context, img1, img2 = _build_context_and_charts(ym, mdf, prev_df, monthly_df_all)
-        doc = DocxTemplate(str(TEMPLATE_PATH))
-        context["graph1"] = InlineImage(doc, img1, width=Mm(90), height=Mm(55))
-        context["graph2"] = InlineImage(doc, img2, width=Mm(90), height=Mm(50))
-        doc.render(context)
-        word_path = tempfile.NamedTemporaryFile(suffix=".docx", delete=False).name
-        doc.save(word_path)
-        data = convert_to_pdf_without_libreoffice(word_path, context, img1, img2)
-        if data is None:
-            data = _try_reportlab_pdf(context, img1, img2)
-            if data is None:
-                raise RuntimeError("PDF 생성에 실패했습니다. 'DOCX 저장' 버튼을 사용해 주세요.")
-        Path(word_path).unlink(missing_ok=True); Path(img1).unlink(missing_ok=True); Path(img2).unlink(missing_ok=True)
-        return io.BytesIO(data)

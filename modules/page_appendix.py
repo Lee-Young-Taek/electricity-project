@@ -1,5 +1,9 @@
 # ============================ modules/page_appendix.py (CSS-scoped) ============================
 from shiny import ui, render, reactive
+# ============================ modules/page_appendix.py (SCOPED, FULL) ============================
+from __future__ import annotations
+
+from shiny import ui, render
 from shared import report_df
 
 # ---- Tab: 개요
@@ -8,26 +12,26 @@ from viz.appendix_overview import (
     render_data_schema,
 )
 
-# ---- Tab: EDA
+# ---- Tab: EDA (synced with viz/appendix_eda.py)
 from viz.appendix_eda import (
+    # 데이터 품질/정합성
     render_calendar_alignment_storyline,
     render_calendar_overlay,
     render_midnight_rollover_fix,
-    render_eda_storyline_panels,
+    # 기초 통계/결측/이상치
     render_basic_stats,
     render_missing_summary,
     render_outlier_summary,
+    # 시계열 스토리라인(월/일/시간/계절)
+    render_eda_storyline_panels,
+    # 변수 분석
     plot_distribution,
     plot_correlation_heatmap,
-    plot_time_trend,
-    plot_hourly_pattern,
-    plot_weekday_pattern,
     plot_worktype_distribution,
-    # 파생 피처 근거 분석
+    plot_worktype_hourly_panels,
+    # 파생 피처 근거
     render_lag_window_acf,
-    render_how_profile_stability,
-    render_holiday_peak_checks,
-    render_unitprice_and_logtarget,
+    render_holiday_peak_checks
 )
 
 # ---- Tab: 전처리
@@ -51,33 +55,34 @@ from viz.appendix_results import (
 )
 
 
-# NOTE: Wrap entire appendix in a unique scope to avoid CSS collisions.
-# - All custom classes already prefix with `billx-` and IDs with `apx_`.
-# - The `.apx-scope` wrapper isolates any descendant CSS rules you may add in appendix.css
-#   (e.g., by writing selectors like `.apx-scope .billx-panel { ... }`).
+# ============================ UI ============================
+# NOTE: Entire Appendix wrapped in a unique scope to avoid CSS collisions.
+# Use `.apx-scope .your-class { ... }` in appendix.css for safe overrides.
 
 def appendix_ui():
     return ui.page_fluid(
-        # Include stylesheet and a tiny scoping helper
         ui.tags.link(rel="stylesheet", href="appendix.css"),
-        ui.tags.style("""
-        /* Optional minimal safe defaults inside the scope to avoid global overrides */
-        .apx-scope { --apx-gap: 12px; }
-        .apx-scope .billx-titlebox { margin-bottom: var(--apx-gap); }
-        .apx-scope .billx-panel { background: #fff; border: 1px solid #e2e8f0; border-radius: .5rem; padding: 12px; }
-        .apx-scope .billx-panel-title { margin: 0 0 8px 0; font-weight: 600; }
-        .apx-scope .soft { opacity: .4; }
-        """),
+        ui.tags.style(
+            """
+            /* Minimal safe defaults in-scope */
+            .apx-scope { --apx-gap: 12px; }
+            .apx-scope .billx-titlebox { margin-bottom: var(--apx-gap); }
+            .apx-scope .billx-panel { background: #fff; border: 1px solid #e2e8f0; border-radius: .5rem; padding: 12px; }
+            .apx-scope .billx-panel-title { margin: 0 0 8px 0; font-weight: 600; }
+            .apx-scope .soft { opacity: .4; }
+            """
+        ),
         ui.div(
-            # ===== Scope wrapper starts here =====
+            # ===== scope wrapper =====
             ui.div(
                 ui.div(
                     ui.h4("데이터 부록 (Appendix)", class_="billx-title"),
-                    ui.span("분석 맥락과 데이터 사전", class_="billx-sub"),
+                    ui.span("데이터 사전 및 분석 흐름", class_="billx-sub"),
                     class_="billx-titlebox",
                 ),
                 class_="billx-ribbon billx apx-header",
             ),
+
             ui.navset_card_pill(
                 # ========= 개요 =========
                 ui.nav_panel(
@@ -125,7 +130,7 @@ def appendix_ui():
                 ui.nav_panel(
                     "EDA",
 
-                    # === 1. 데이터 품질 검증 ===
+                    # === 1. 데이터 정합성 ===
                     ui.div(ui.h5("데이터 정합성 검증", class_="billx-panel-title"), class_="billx-panel"),
                     ui.output_ui("apx_calendar_alignment"),
 
@@ -164,30 +169,22 @@ def appendix_ui():
 
                     ui.hr({"class": "soft"}),
 
-                    # === 3. 시계열 패턴 ===
+                    # === 3. 시계열 스토리라인(중복 제거 버전) ===
                     ui.output_ui("apx_eda_storyline"),
 
                     ui.hr({"class": "soft"}),
 
                     # === 4. 변수 분석 ===
                     ui.div(ui.h5("변수 분석", class_="billx-panel-title"), class_="billx-panel"),
-
                     ui.layout_columns(
                         ui.div(ui.h5("변수 간 상관관계", class_="billx-panel-title"), ui.output_ui("apx_corr_heatmap"), class_="billx-panel"),
                         ui.div(ui.h5("주요 변수 분포", class_="billx-panel-title"), ui.output_ui("apx_dist_plot"), class_="billx-panel"),
                         col_widths=[6, 6],
                     ),
-
                     ui.layout_columns(
-                        ui.div(ui.h5("시간대별 패턴", class_="billx-panel-title"), ui.output_ui("apx_hourly_pattern"), class_="billx-panel"),
-                        ui.div(ui.h5("요일별 패턴", class_="billx-panel-title"), ui.output_ui("apx_weekday_pattern"), class_="billx-panel"),
-                        col_widths=[6, 6],
-                    ),
-
-                    ui.layout_columns(
-                        ui.div(ui.h5("시계열 추이", class_="billx-panel-title"), ui.output_ui("apx_time_trend"), class_="billx-panel"),
+                        ui.div(ui.h5("작업유형 × 시간대 패턴 (kWh/원)", class_="billx-panel-title"), ui.output_ui("apx_worktype_hourly"), class_="billx-panel"),
                         ui.div(ui.h5("작업유형별 분포", class_="billx-panel-title"), ui.output_ui("apx_worktype_dist"), class_="billx-panel"),
-                        col_widths=[6, 6],
+                        col_widths=[8, 4],
                     ),
 
                     ui.hr({"class": "soft"}),
@@ -198,16 +195,9 @@ def appendix_ui():
                         ui.div("모델 성능 향상을 위한 파생 피처 설계의 통계적 타당성을 검증합니다.", class_="alert alert-info mb-0"),
                         class_="billx-panel",
                     ),
-
                     ui.layout_columns(
                         ui.div(ui.h5("시차 상관관계 (ACF)", class_="billx-panel-title"), ui.output_ui("apx_lag_acf"), class_="billx-panel"),
-                        ui.div(ui.h5("Hour of Week 안정성", class_="billx-panel-title"), ui.output_ui("apx_how_stability"), class_="billx-panel"),
-                        col_widths=[6, 6],
-                    ),
-
-                    ui.layout_columns(
                         ui.div(ui.h5("피크시간대 영향", class_="billx-panel-title"), ui.output_ui("apx_holiday_peak"), class_="billx-panel"),
-                        ui.div(ui.h5("단가 & 로그변환", class_="billx-panel-title"), ui.output_ui("apx_unitprice_log"), class_="billx-panel"),
                         col_widths=[6, 6],
                     ),
                 ),
@@ -215,7 +205,7 @@ def appendix_ui():
                 # ========= 전처리 =========
                 ui.nav_panel(
                     "전처리",
-                    ui.div(ui.h5("전처리 파이프라인 (9단계)", class_="billx-panel-title"), ui.output_ui("apx_pipeline_accordion"), class_="billx-panel"),
+                    ui.div(ui.h5("전처리 파이프라인", class_="billx-panel-title"), ui.output_ui("apx_pipeline_accordion"), class_="billx-panel"),
                     ui.div(ui.h5("생성된 피처 요약", class_="billx-panel-title"), ui.output_ui("apx_feature_summary"), class_="billx-panel"),
                     ui.layout_columns(
                         ui.div(ui.h5("스케일링/인코딩 전략", class_="billx-panel-title"), ui.output_ui("apx_scaling_info"), class_="billx-panel"),
@@ -240,9 +230,9 @@ def appendix_ui():
                                 "모델 구성",
                                 ui.tags.ul(
                                     ui.tags.li("LightGBM (Raw Target)"),
-                                    ui.tags.li("XGBoost"),
-                                    ui.tags.li("HistGradientBoostingRegressor"),
-                                    ui.tags.li("LightGBM (Log Target)")
+                                    ui.tags.li("XGBoost (Log Target)"),
+                                    ui.tags.li("HistGradientBoostingRegressor (Log Target)"),
+                                    ui.tags.li("LightGBM (Log Target)"),
                                 ),
                             ),
                             ui.accordion_panel(
@@ -255,7 +245,7 @@ def appendix_ui():
                             ui.accordion_panel(
                                 "평가 기준",
                                 ui.tags.ul(
-                                    ui.tags.li("Holdout MAE (원 단위)")
+                                    ui.tags.li("Holdout MAE (원 단위)"),
                                 ),
                             ),
                             ui.accordion_panel(
@@ -297,13 +287,10 @@ def appendix_ui():
                             multiple=True,
                             open=["학습/검증 곡선"],
                         ),
-                        ui.div(
-                            ui.h5("최종 모델 파라미터", class_="billx-panel-title"),
-                            ui.output_ui("apx_model_params"),
-                            class_="billx-panel"
-                        ),
+                        ui.div(ui.h5("최종 모델 파라미터", class_="billx-panel-title"), ui.output_ui("apx_model_params"), class_="billx-panel"),
                         col_widths=[7, 5],
                     ),
+                    ui.div(ui.h5("학습/검증 곡선", class_="billx-panel-title"), ui.output_ui("apx_learning_curve"), class_="billx-panel"),
                 ),
 
                 # ========= 결과/검증 =========
@@ -325,10 +312,12 @@ def appendix_ui():
                 ),
                 id="apx_tabs",
             ),
-            class_="apx-scope",  # <<======= CSS scope wrapper
+            class_="apx-scope",
         ),
     )
 
+
+# ============================ Server ============================
 
 def appendix_server(input, output, session):
     selected_curve_model = reactive.Value("LGBM (RAW)")
@@ -389,11 +378,6 @@ def appendix_server(input, output, session):
 
     @output
     @render.ui
-    def apx_eda_storyline():
-        return render_eda_storyline_panels(report_df)
-
-    @output
-    @render.ui
     def apx_basic_stats():
         return render_basic_stats(report_df)
 
@@ -409,8 +393,8 @@ def appendix_server(input, output, session):
 
     @output
     @render.ui
-    def apx_dist_plot():
-        return plot_distribution(report_df)
+    def apx_eda_storyline():
+        return render_eda_storyline_panels(report_df)
 
     @output
     @render.ui
@@ -419,18 +403,13 @@ def appendix_server(input, output, session):
 
     @output
     @render.ui
-    def apx_time_trend():
-        return plot_time_trend(report_df)
+    def apx_dist_plot():
+        return plot_distribution(report_df)
 
     @output
     @render.ui
-    def apx_hourly_pattern():
-        return plot_hourly_pattern(report_df)
-
-    @output
-    @render.ui
-    def apx_weekday_pattern():
-        return plot_weekday_pattern(report_df)
+    def apx_worktype_hourly():
+        return plot_worktype_hourly_panels(report_df)
 
     @output
     @render.ui
@@ -445,20 +424,10 @@ def appendix_server(input, output, session):
 
     @output
     @render.ui
-    def apx_how_stability():
-        return render_how_profile_stability(report_df)
-
-    @output
-    @render.ui
     def apx_holiday_peak():
         return render_holiday_peak_checks(report_df)
 
-    @output
-    @render.ui
-    def apx_unitprice_log():
-        return render_unitprice_and_logtarget(report_df)
-
-    # ---- 전처리
+        # ---- 전처리
     @output
     @render.ui
     def apx_pipeline_accordion():

@@ -262,3 +262,9 @@ hr.soft {
 .pred-dot {
   display: none !important;
 }
+
+.kpi-card.kpi--danger {
+  outline: 2px solid rgba(231, 76, 60, 0.55);
+  box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.16) inset;
+  background: rgba(231, 76, 60, 0.06);
+}

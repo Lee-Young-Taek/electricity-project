@@ -391,7 +391,7 @@ def render_pipeline_accordion():
             )
         ),
         id="pipeline_accordion",
-        open=["Step 0: 데이터 정제", "Step 3: OOF 3변수 (5Fold TS)"]
+        open=False
     )
 
 

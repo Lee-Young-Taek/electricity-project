@@ -246,14 +246,24 @@ hr.soft {
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25) inset;
 }
 
-/* --- KPI 델타 표시 --- */
-.kpi{ display:flex; flex-direction:column; position:relative; }  /* 부모를 기준점으로 */
-.kpi-delta{ position:absolute; right:14px; top:12px; font-size:12px; font-weight:700; }
+/* --- KPI 델타 표시 (크기/위치 업) --- */
+.kpi{
+  display:flex; flex-direction:column; position:relative;
+  padding-right: 34px;            /* 숫자가 우상단에 겹치지 않도록 여유 */
+}
+.kpi-delta{
+  position:absolute;
+  right:14px;
+  top:10px;                       /* 필요하면 8~12px 사이로 조절 */
+  font-size:15px;                 /* ← 크기 키우는 핵심 */
+  font-weight:800;                /* 더 굵게 */
+  letter-spacing:0.2px;           /* 선택: 가독성 */
+}
 
-/* 색상은 안쪽 span의 class로 분리해서 확실히 적용 */
-.kpi-delta .na { color: var(--muted); }
-.kpi-delta .pos{ color:#166534; }   /* 상승: 초록 */
-.kpi-delta .neg{ color:#b91c1c; }   /* 하락: 빨강 */
+/* (색상은 클래스 방식일 때 사용) */
+.kpi-delta .na  { color: var(--muted); }
+.kpi-delta .pos { color:#166534; }   /* 상승: 초록 */
+.kpi-delta .neg { color:#b91c1c; }   /* 하락: 빨강 */
 
 
 
