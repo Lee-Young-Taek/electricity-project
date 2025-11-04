@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 from pathlib import Path
 
 # 한글 폰트 설정 (Windows 기본 값: Malgun Gothic)
@@ -41,6 +42,10 @@ test_df["작업유형"].value_counts()
 # 측정일시 데이터 타입 변환
 train_df["측정일시"] = pd.to_datetime(train_df["측정일시"], format="%Y-%m-%d %H:%M:%S")
 test_df["측정일시"] = pd.to_datetime(test_df["측정일시"], format="%Y-%m-%d %H:%M:%S")
+
+# 모든 측정일시 데이터 년도 18년도로 변경
+train_df["측정일시"] = train_df["측정일시"].apply(lambda dt: dt.replace(year=2018))
+test_df["측정일시"] = test_df["측정일시"].apply(lambda dt: dt.replace(year=2018))
 
 ####################################################################################################
 # 시간축 (15분 간격) 무결성 확인
@@ -131,7 +136,96 @@ train_df["minute"] = train_df["측정일시"].dt.minute
 train_df["second"] = train_df["측정일시"].dt.second
 train_df["weekday"] = train_df["측정일시"].dt.weekday
 train_df["is_weekend"] = train_df["weekday"].isin([5,6]).astype(int)
-train_df["is_21"] = (train_df["hour"] == 21).astype(int)
+pd.set_option('display.max_rows', None)
+train_df.loc[(train_df["hour"] == 12), :]
+
+highlight_periods_2018 = [
+    ("2018-01-01", "2018-01-01"),
+    ("2018-02-15", "2018-02-17"),
+    ("2018-03-01", "2018-03-01"),
+    ("2018-05-05", "2018-05-05"),
+    ("2018-05-07", "2018-05-07"),
+    ("2018-05-22", "2018-05-22"),
+    ("2018-06-06", "2018-06-06"),
+    ("2018-06-13", "2018-06-13"),
+    ("2018-08-15", "2018-08-15"),
+    ("2018-09-23", "2018-09-25"),
+    ("2018-09-26", "2018-09-26"),
+    ("2018-10-03", "2018-10-03"),
+    ("2018-10-09", "2018-10-09"),
+    ("2018-12-25", "2018-12-25"),
+]
+
+highlight_dates_2018 = set()
+for start, end in highlight_periods_2018:
+    highlight_dates_2018.update(pd.date_range(start=start, end=end, freq="D").date)
+
+train_df["is_special_day"] = train_df["측정일시"].dt.date.apply(lambda d: int(d in highlight_dates_2018))
+
+for month_value in sorted(train_df["month"].unique()):
+    month_slice = train_df[train_df["month"] == month_value]
+    if month_slice.empty:
+        continue
+
+    daily_profile = (
+        month_slice
+        .groupby("day")
+        .agg(
+            mean_kwh=("전력사용량(kWh)", "mean"),
+            weekend_flag=("is_weekend", "mean"),
+            holiday_flag=("is_special_day", "mean")
+        )
+        .reset_index()
+    )
+
+    bar_colors = []
+    for is_holiday, is_weekend in zip(daily_profile["holiday_flag"], daily_profile["weekend_flag"]):
+        if is_holiday:
+            bar_colors.append("gold")
+        elif is_weekend:
+            bar_colors.append("red")
+        else:
+            bar_colors.append("steelblue")
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    bars = ax.bar(
+        daily_profile["day"],
+        daily_profile["mean_kwh"],
+        color=bar_colors,
+        edgecolor="black",
+        linewidth=0.5
+    )
+    ax.set_title(f"{month_value}월 일별 평균 전력사용량")
+    ax.set_xlabel("일")
+    ax.set_ylabel("평균 전력사용량(kWh)")
+
+    legend_handles = [
+        Patch(facecolor="steelblue", edgecolor="black", label="평일"),
+        Patch(facecolor="red", edgecolor="black", label="주말"),
+        Patch(facecolor="gold", edgecolor="black", label="공휴일")
+    ]
+    ax.legend(handles=legend_handles, loc="upper right")
+    ax.set_xticks(daily_profile["day"])
+    ax.set_xticklabels(daily_profile["day"], rotation=0)
+
+    value_labels = [f"{val:.1f}" for val in daily_profile["mean_kwh"]]
+    ax.bar_label(bars, labels=value_labels, padding=3, fontsize=9)
+    fig.tight_layout()
+    plt.show()
+
+
+    # add(pd.to_datetime("2018-01-01").date())  # 신정
+    # add_range("2018-02-15", "2018-02-17")     # 설날 연휴
+    # add(pd.to_datetime("2018-03-01").date())  # 삼일절
+    # add(pd.to_datetime("2018-05-07").date())  # 어린이날 대체공휴일
+    # add(pd.to_datetime("2018-05-22").date())  # 부처님오신날
+    # add(pd.to_datetime("2018-06-06").date())  # 현충일
+    # add(pd.to_datetime("2018-06-13").date())  # 지방선거
+    # add(pd.to_datetime("2018-08-15").date())  # 광복절
+    # add_range("2018-09-22", "2018-09-26")     # 추석 연휴 및 대체공휴일
+    # add(pd.to_datetime("2018-10-03").date())  # 개천절
+    # add(pd.to_datetime("2018-10-09").date())  # 한글날
+    # add(pd.to_datetime("2018-12-25").date())  # 성탄절
 
 # 2024년 연휴 여부 컬럼 생성
 holiday_periods = [
