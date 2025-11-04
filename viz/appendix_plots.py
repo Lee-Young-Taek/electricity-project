@@ -1,380 +1,417 @@
-# =============================
-# viz/appendix_plots.py — Appendix 시각화/요약 유틸 (그래프 + 스토리라인)
-# =============================
+# viz/appendix_plots.py
 from __future__ import annotations
-import uuid
-import numpy as np
-import pandas as pd
+import numpy as np, pandas as pd
 from shiny import ui
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# ─────────────────────────────────────────────
-# 공통 유틸
-# ─────────────────────────────────────────────
+# ================= Color / Layout palette (tone-matched) =================
+_PALETTE = {
+    "primary": "#3B82F6",   # blue-500
+    "accent":  "#10B981",   # emerald-500
+    "warn":    "#F59E0B",   # amber-500
+    "danger":  "#EF4444",   # red-500
+    "muted":   "#6B7280",   # gray-500
+    "line":    "#111827",   # near-black for lines
+}
 
-def _uid(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+def _apply_layout(fig: go.Figure, title: str = "", height: int = 420):
+    fig.update_layout(
+        template="plotly_white",
+        title=title,
+        height=height,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(family="Noto Sans KR, Inter, Arial", size=12, color=_PALETTE["line"]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=40, r=20, t=60, b=40),
+    )
+    return fig
 
+# ==========================================================
+# 공통 유틸 (DatetimeIndex 호환 + 안전 변환)
+# ==========================================================
 
-def _to_dt(s: pd.Series) -> pd.Series:
+def _to_dt(s) -> pd.Series:
+    if isinstance(s, (pd.DatetimeIndex, pd.Index)):
+        s = pd.Series(s)
+    else:
+        s = pd.Series(s)
     return pd.to_datetime(s, errors="coerce")
 
 
-def _season_from_month(m: int) -> str:
-    if m in (12, 1, 2):
-        return "겨울"
-    if m in (3, 4, 5):
-        return "봄"
-    if m in (6, 7, 8):
-        return "여름"
-    return "가을"
+def _safe_replace_year(dt_like, year: int) -> pd.Series:
+    s = _to_dt(dt_like)
+    out = []
+    for ts in s:
+        if pd.isna(ts):
+            out.append(pd.NaT); continue
+        m, d, h, mi, se = ts.month, ts.day, ts.hour, ts.minute, ts.second
+        if m == 2 and d == 29:
+            d = 28
+        try:
+            out.append(pd.Timestamp(year, m, d, h, mi, se))
+        except Exception:
+            last = pd.Timestamp(year, m, 1) + pd.offsets.MonthEnd(0)
+            out.append(pd.Timestamp(year, m, last.day, h, mi, se))
+    return pd.Series(pd.to_datetime(out))
 
 
-def _apply_plot_theme(fig: go.Figure, height: int = 360) -> go.Figure:
-    fig.update_layout(
-        template="simple_white",
-        height=height,
-        margin=dict(l=40, r=16, t=48, b=36),
-        hovermode="x unified",
-        font=dict(family="Noto Sans KR, system-ui, -apple-system, Segoe UI, Roboto, sans-serif", size=12),
-        title=dict(font=dict(size=16), x=0),
-        paper_bgcolor="#ffffff",
-        plot_bgcolor="#ffffff",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
-    fig.update_xaxes(automargin=True)
-    fig.update_yaxes(automargin=True)
-    return fig
+def _weekend_flag(dt_like) -> pd.Series:
+    s = _to_dt(dt_like)
+    return (s.dt.dayofweek >= 5).astype(int)
 
 
-# ─────────────────────────────────────────────
-# 개요 탭
-# ─────────────────────────────────────────────
+def _season_of_month(m: int) -> str:
+    return {12:"winter",1:"winter",2:"winter",3:"spring",4:"spring",5:"spring",6:"summer",7:"summer",8:"summer",9:"autumn",10:"autumn",11:"autumn"}.get(m, "unknown")
 
-def render_data_schema() -> ui.HTML:
-    schema = pd.DataFrame(
-        {
-            "컬럼명": [
-                "id",
-                "측정일시",
-                "전력사용량(kWh)",
-                "지상무효전력량(kVarh)",
-                "진상무효전력량(kVarh)",
-                "탄소배출량(tCO2)",
-                "지상역률(%)",
-                "진상역률(%)",
-                "작업유형",
-                "전기요금(원)",
-            ],
-            "타입": [
-                "int",
-                "datetime",
-                "float",
-                "float",
-                "float",
-                "float",
-                "float",
-                "float",
-                "object",
-                "float",
-            ],
-            "설명": [
-                "각 측정값의 고유 식별자",
-                "측정 시각 (15분 간격)",
-                "실제 전력 사용량",
-                "무효 전력량 (지상)",
-                "무효 전력량 (진상)",
-                "전력 사용으로 인한 탄소 배출량",
-                "지상 방향 역률(%)",
-                "진상 방향 역률(%)",
-                "부하/운영 유형",
-                "예측 대상 (전력×단가)",
-            ],
-        }
-    )
+
+# ==========================================================
+# 공휴일 세트 (대체/임시 제외) — 사용자 제공 리스트 반영
+# ==========================================================
+
+def _holidays_by_year(year: int) -> set:
+    d = set()
+    def add_range(a, b):
+        for dt in pd.date_range(a, b, freq="D"):
+            d.add(dt.date())
+
+    if year == 2018:
+        d.add(pd.Timestamp("2018-01-01").date())
+        add_range("2018-02-15","2018-02-17")
+        d.add(pd.Timestamp("2018-03-01").date())
+        d.add(pd.Timestamp("2018-05-05").date())
+        d.add(pd.Timestamp("2018-05-22").date())
+        d.add(pd.Timestamp("2018-06-06").date())
+        d.add(pd.Timestamp("2018-08-15").date())
+        add_range("2018-09-23","2018-09-25")
+        d.add(pd.Timestamp("2018-10-03").date())
+        d.add(pd.Timestamp("2018-10-09").date())
+        d.add(pd.Timestamp("2018-12-25").date())
+    elif year == 2019:
+        d.add(pd.Timestamp("2019-01-01").date())
+        add_range("2019-02-04","2019-02-06")
+        d.add(pd.Timestamp("2019-03-01").date())
+        d.add(pd.Timestamp("2019-05-05").date())
+        d.add(pd.Timestamp("2019-05-12").date())
+        d.add(pd.Timestamp("2019-06-06").date())
+        d.add(pd.Timestamp("2019-08-15").date())
+        add_range("2019-09-12","2019-09-14")
+        d.add(pd.Timestamp("2019-10-03").date())
+        d.add(pd.Timestamp("2019-10-09").date())
+        d.add(pd.Timestamp("2019-12-25").date())
+    elif year == 2021:
+        d.add(pd.Timestamp("2021-01-01").date())
+        add_range("2021-02-11","2021-02-13")
+        d.add(pd.Timestamp("2021-03-01").date())
+        d.add(pd.Timestamp("2021-05-05").date())
+        d.add(pd.Timestamp("2021-05-19").date())
+        d.add(pd.Timestamp("2021-06-06").date())
+        d.add(pd.Timestamp("2021-08-15").date())
+        add_range("2021-09-20","2021-09-22")
+        d.add(pd.Timestamp("2021-10-03").date())
+        d.add(pd.Timestamp("2021-10-09").date())
+        d.add(pd.Timestamp("2021-12-25").date())
+    elif year == 2022:
+        d.add(pd.Timestamp("2022-01-01").date())
+        add_range("2022-01-31","2022-02-02")
+        d.add(pd.Timestamp("2022-03-01").date())
+        d.add(pd.Timestamp("2022-03-09").date())
+        d.add(pd.Timestamp("2022-05-05").date())
+        d.add(pd.Timestamp("2022-05-08").date())
+        d.add(pd.Timestamp("2022-06-01").date())
+        d.add(pd.Timestamp("2022-06-06").date())
+        add_range("2022-09-09","2022-09-11")
+        d.add(pd.Timestamp("2022-10-03").date())
+        d.add(pd.Timestamp("2022-10-09").date())
+        d.add(pd.Timestamp("2022-12-25").date())
+    elif year == 2023:
+        d.add(pd.Timestamp("2023-01-01").date())
+        add_range("2023-01-21","2023-01-23")
+        d.add(pd.Timestamp("2023-03-01").date())
+        d.add(pd.Timestamp("2023-05-05").date())
+        d.add(pd.Timestamp("2023-05-27").date())
+        d.add(pd.Timestamp("2023-06-06").date())
+        d.add(pd.Timestamp("2023-08-15").date())
+        add_range("2023-09-28","2023-09-30")
+        d.add(pd.Timestamp("2023-10-03").date())
+        d.add(pd.Timestamp("2023-10-09").date())
+        d.add(pd.Timestamp("2023-12-25").date())
+    else:
+        return set()
+    return d
+
+
+# ==========================================================
+# 개요 탭: 스키마/헤드
+# ==========================================================
+
+def render_data_schema():
+    schema = pd.DataFrame({
+        "컬럼명": [
+            "id", "측정일시", "전력사용량(kWh)", "지상무효전력량(kVarh)",
+            "진상무효전력량(kVarh)", "탄소배출량(tCO2)", "지상역률(%)",
+            "진상역률(%)", "작업유형", "전기요금(원)"
+        ],
+        "타입": [
+            "int", "datetime", "float", "float", "float",
+            "float", "float", "float", "object", "float"
+        ],
+        "설명": [
+            "고유 식별자",
+            "측정 시각 (15분 간격)",
+            "전력 사용량",
+            "무효 전력량(지상)",
+            "무효 전력량(진상)",
+            "탄소 배출량",
+            "역률(지상)",
+            "역률(진상)",
+            "부하 유형",
+            "예측 대상 값"
+        ],
+    })
     html = schema.to_html(classes="table table-sm table-hover", index=False, border=0)
-    return ui.HTML('<div style="max-height:500px; overflow-y:auto;">{}</div>'.format(html))
+    return ui.HTML(f'<div style="max-height:500px; overflow-y:auto;">{html}</div>')
 
 
-def render_data_head(df: pd.DataFrame, n: int = 10) -> ui.HTML:
-    display_df = df.head(n).copy()
-    html = display_df.to_html(
-        classes="table table-sm table-striped table-bordered",
-        index=False,
-        border=0,
-        float_format=lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else x,
-    )
-    return ui.HTML('<div style="overflow-x:auto; overflow-y:auto;">{}</div>'.format(html))
+def render_data_head(df: pd.DataFrame, n: int = 10):
+    d = df.head(n).copy()
+    html = d.to_html(classes="table table-sm table-striped table-bordered", index=False, border=0)
+    return ui.HTML(f'<div style="overflow-x:auto; overflow-y:auto;">{html}</div>')
 
 
-# ─────────────────────────────────────────────
-# EDA (표/요약/분포/상관/패턴/시계열)
-# ─────────────────────────────────────────────
+# ==========================================================
+# EDA: 표/그래프 기본
+# ==========================================================
 
-def render_basic_stats(df: pd.DataFrame) -> ui.HTML:
-    numeric_df = df.select_dtypes(include=[np.number])
-    if numeric_df.empty:
-        return ui.div("수치형 컬럼 없음", class_="p-3 text-muted")
-
-    stats = numeric_df.describe().T
-    stats["결측수"] = numeric_df.isnull().sum()
-    stats["결측률(%)"] = (numeric_df.isnull().sum() / len(numeric_df) * 100).round(2)
-    stats = stats[["count","mean","std","min","25%","50%","75%","max","결측수","결측률(%)"]]
+def render_basic_stats(df: pd.DataFrame):
+    num = df.select_dtypes(include=[np.number])
+    stats = num.describe().T
+    stats["결측수"] = num.isnull().sum()
+    stats["결측률(%)"] = (num.isnull().sum() / len(num) * 100).round(2)
+    stats = stats[["count","mean","std","min","25%","50%","75%","max","결측수","결측률(%)"]].round(2)
     stats.columns = ["개수","평균","표준편차","최소","25%","중앙값","75%","최대","결측수","결측률(%)"]
-    html = stats.round(2).to_html(classes="table table-sm table-striped", border=0)
-    return ui.HTML('<div style="max-height:400px; overflow-y:auto;">{}</div>'.format(html))
+    html = stats.to_html(classes="table table-sm table-striped", border=0)
+    return ui.HTML(f'<div style="max-height:420px; overflow-y:auto;">{html}</div>')
 
 
-def render_missing_summary(df: pd.DataFrame) -> ui.Tag:
-    missing = pd.DataFrame({"컬럼": df.columns, "결측수": df.isnull().sum(), "결측률(%)": (df.isnull().sum() / len(df) * 100).round(2)})
-    missing = missing[missing["결측수"] > 0].sort_values("결측수", ascending=False)
-    if len(missing) == 0:
-        return ui.div(ui.tags.h5("결측치 없음", class_="text-success text-center mt-4"), class_="p-4")
-    html = missing.to_html(classes="table table-sm table-striped", index=False, border=0)
+def render_missing_summary(df: pd.DataFrame):
+    m = pd.DataFrame({
+        "컬럼": df.columns,
+        "결측수": df.isnull().sum(),
+        "결측률(%)": (df.isnull().sum() / len(df) * 100).round(2),
+    })
+    m = m[m["결측수"] > 0].sort_values("결측수", ascending=False)
+    if len(m) == 0:
+        return ui.div(ui.tags.h5("결측치 없음", class_="text-center"), class_="p-3")
+    html = m.to_html(classes="table table-sm table-striped", index=False, border=0)
     return ui.HTML(html)
 
 
-def render_outlier_summary(df: pd.DataFrame) -> ui.HTML:
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    outliers = []
-    for col in numeric_cols:
-        Q1 = df[col].quantile(0.25)
-        Q3 = df[col].quantile(0.75)
+def render_outlier_summary(df: pd.DataFrame):
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    rows = []
+    for c in num_cols:
+        Q1, Q3 = df[c].quantile(0.25), df[c].quantile(0.75)
         IQR = Q3 - Q1
-        lower, upper = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
-        cnt = ((df[col] < lower) | (df[col] > upper)).sum()
-        rate = (cnt / len(df) * 100)
-        if cnt > 0:
-            outliers.append({"컬럼": col, "이상치수": cnt, "이상치율(%)": round(rate, 2), "하한": round(lower, 2), "상한": round(upper, 2)})
-
-    result = ['<div class="alert alert-info mb-3">',
-              "<h6 class=\"mb-2\">실제 적용 이상치 처리</h6>",
-              "<ul class=\"mb-0\">",
-              "<li><strong>타겟(전기요금)</strong> 상위 0.7% 제거 (99.3% 분위수 초과)</li>",
-              "<li><strong>특정 시점</strong> 제거: 2024-11-07 00:00:00</li>",
-              "</ul></div>"]
-
-    if outliers:
-        outlier_df = pd.DataFrame(outliers)
-        result += ['<h6 class="mt-3">IQR 기준 이상치 분포</h6>', outlier_df.to_html(classes="table table-sm table-striped", index=False, border=0)]
+        lo, hi = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
+        cnt = int(((df[c] < lo) | (df[c] > hi)).sum())
+        if cnt:
+            rows.append({"컬럼": c, "이상치수": cnt, "이상치율(%)": round(cnt/len(df)*100,2), "하한": round(lo,2), "상한": round(hi,2)})
+    html = "<div>"
+    html += '<div class="alert alert-info mb-3">'
+    html += '<h6 class="mb-2">적용된 이상치 처리</h6>'
+    html += '<ul class="mb-0">'
+    html += '<li>타겟(전기요금) 상위 0.7% 제거</li>'
+    html += '<li>특정 시점 제거: 2018-11-07 00:00:00 (정합성 이슈 보정)</li>'
+    html += '</ul></div>'
+    if rows:
+        outlier_df = pd.DataFrame(rows)
+        html += '<h6 class="mt-3">IQR 기준 이상치 분포</h6>'
+        html += outlier_df.to_html(classes='table table-sm table-striped', index=False, border=0)
     else:
-        result += ["<p class=\"text-success mt-3\">IQR 기준 이상치 없음</p>"]
-
-    return ui.HTML("".join(result))
-
-
-def plot_distribution(df: pd.DataFrame) -> ui.HTML:
-    cols = [("전력사용량(kWh)", None),("전기요금(원)", None),("지상무효전력량(kVarh)", None),("지상역률(%)", None)]
-    fig = make_subplots(rows=2, cols=2, subplot_titles=[c for c, _ in cols])
-    r, c = 1, 1
-    for col, _ in cols:
-        if col not in df.columns:
-            c = 1 if c == 2 else 2
-            continue
-        fig.add_trace(go.Histogram(x=df[col], nbinsx=50, showlegend=False), row=r, col=c)
-        c = 1 if c == 2 else 2
-        if c == 1:
-            r += 1
-    _apply_plot_theme(fig, height=520)
-    fig.update_layout(title_text="주요 변수 분포")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("dist")))
+        html += '<p class="text-success mt-3">IQR 기준 이상치 없음</p>'
+    html += '</div>'
+    return ui.HTML(html)
 
 
-def plot_correlation_heatmap(df: pd.DataFrame) -> ui.Tag:
-    key_cols = ["전력사용량(kWh)","지상무효전력량(kVarh)","진상무효전력량(kVarh)","지상역률(%)","진상역률(%)","탄소배출량(tCO2)","전기요금(원)"]
-    exist = [c for c in key_cols if c in df.columns]
-    if len(exist) < 2:
-        return ui.div("상관관계 계산을 위한 수치형 변수 부족", class_="p-3 text-muted")
-    corr = df[exist].corr()
-    fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.columns, colorscale="RdBu_r", zmid=0,
-                                    text=corr.values.round(2), texttemplate="%{text}", textfont={"size": 10}))
-    _apply_plot_theme(fig, height=520)
-    fig.update_layout(title="주요 변수 간 상관관계")
-    fig.update_xaxes(tickangle=45)
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("corr")))
+def plot_distribution(df: pd.DataFrame):
+    fig = make_subplots(rows=2, cols=2, subplot_titles=("전력사용량(kWh)", "전기요금(원)", "지상무효전력량(kVarh)", "지상역률(%)"))
+    if "전력사용량(kWh)" in df:
+        fig.add_histogram(x=df["전력사용량(kWh)"], nbinsx=50, showlegend=False, row=1, col=1)
+    if "전기요금(원)" in df:
+        fig.add_histogram(x=df["전기요금(원)"], nbinsx=50, showlegend=False, row=1, col=2)
+    if "지상무효전력량(kVarh)" in df:
+        fig.add_histogram(x=df["지상무효전력량(kVarh)"], nbinsx=50, showlegend=False, row=2, col=1)
+    if "지상역률(%)" in df:
+        fig.add_histogram(x=df["지상역률(%)"], nbinsx=50, showlegend=False, row=2, col=2)
+    fig.update_layout(height=520, title_text="주요 변수 분포", margin=dict(l=40, r=20, t=60, b=40))
+    return ui.HTML(go.Figure(fig).to_html(include_plotlyjs='cdn', full_html=False))
 
 
-def plot_time_trend(df: pd.DataFrame) -> ui.HTML:
+def plot_correlation_heatmap(df: pd.DataFrame):
+    keys = ["전력사용량(kWh)", "지상무효전력량(kVarh)", "진상무효전력량(kVarh)", "지상역률(%)", "진상역률(%)", "탄소배출량(tCO2)", "전기요금(원)"]
+    cols = [c for c in keys if c in df.columns]
+    if len(cols) < 2:
+        return ui.div("상관분석을 위한 수치형 변수 부족", class_="p-3 small-muted")
+    corr = df[cols].corr()
+    fig = go.Figure(go.Heatmap(z=corr.values, x=corr.columns, y=corr.columns, colorscale='RdBu_r', zmid=0, text=corr.values.round(2), texttemplate='%{text}', textfont={"size": 10}))
+    fig.update_layout(title='주요 변수 상관관계', height=520, margin=dict(l=40, r=20, t=60, b=40))
+    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
+
+
+def plot_time_trend(df: pd.DataFrame):
     d = df.copy()
-    d["측정일시"] = _to_dt(d["측정일시"])
-    d = d.dropna(subset=["측정일시"])  
-    daily = d.groupby(d["측정일시"].dt.date).agg({"전력사용량(kWh)": "sum", "전기요금(원)": "sum"}).reset_index()
+    d['측정일시'] = _to_dt(d['측정일시'])
+    daily = d.groupby(d['측정일시'].dt.date).agg({
+        '전력사용량(kWh)': 'sum',
+        '전기요금(원)': 'sum'
+    }).reset_index()
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(go.Scatter(x=daily["측정일시"], y=daily["전력사용량(kWh)"], name="전력사용량(kWh)", line=dict(width=2)), secondary_y=False)
-    if "전기요금(원)" in daily.columns:
-        fig.add_trace(go.Scatter(x=daily["측정일시"], y=daily["전기요금(원)"], name="전기요금(원)", line=dict(width=2)), secondary_y=True)
-    _apply_plot_theme(fig, height=420)
-    fig.update_layout(title="일별 전력사용량 및 전기요금 추이")
-    fig.update_xaxes(title_text="날짜")
-    fig.update_yaxes(title_text="전력사용량 (kWh)", secondary_y=False)
-    fig.update_yaxes(title_text="전기요금 (원)", secondary_y=True)
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("trend")))
+    if '전력사용량(kWh)' in daily:
+        fig.add_scatter(x=daily['측정일시'], y=daily['전력사용량(kWh)'], name='전력사용량(kWh)')
+    if '전기요금(원)' in daily:
+        fig.add_scatter(x=daily['측정일시'], y=daily['전기요금(원)'], name='전기요금(원)', secondary_y=True)
+    fig.update_layout(title='일별 전력사용량/전기요금 추이', height=420, hovermode='x unified', margin=dict(l=40, r=20, t=60, b=40))
+    fig.update_xaxes(title_text='날짜')
+    fig.update_yaxes(title_text='전력사용량 (kWh)', secondary_y=False)
+    fig.update_yaxes(title_text='전기요금 (원)', secondary_y=True)
+    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
 
 
-def plot_hourly_pattern(df: pd.DataFrame) -> ui.HTML:
+def plot_hourly_pattern(df: pd.DataFrame):
     d = df.copy()
-    d["측정일시"] = _to_dt(d["측정일시"]) ; d = d.dropna(subset=["측정일시"])  
-    d["hour"] = d["측정일시"].dt.hour
-    g = d.groupby("hour")["전력사용량(kWh)"].mean().reset_index()
-    fig = go.Figure(go.Scatter(x=g["hour"], y=g["전력사용량(kWh)"], mode="lines+markers", marker=dict(size=7)))
-    _apply_plot_theme(fig, height=360)
-    fig.update_layout(title="시간대별 평균 전력 사용량")
-    fig.update_xaxes(title="시간 (Hour)")
-    fig.update_yaxes(title="평균 전력사용량 (kWh)")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("hourly")))
+    d['측정일시'] = _to_dt(d['측정일시'])
+    d['hour'] = d['측정일시'].dt.hour
+    hourly = d.groupby('hour')['전력사용량(kWh)'].mean().reset_index()
+    fig = go.Figure()
+    if not hourly.empty:
+        fig.add_scatter(x=hourly['hour'], y=hourly['전력사용량(kWh)'], mode='lines+markers', name='평균')
+    fig.update_layout(title='시간대별 평균 전력 사용량', xaxis_title='시간', yaxis_title='kWh', height=420, margin=dict(l=40, r=20, t=60, b=40))
+    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
 
 
-def plot_weekday_pattern(df: pd.DataFrame) -> ui.HTML:
+def plot_weekday_pattern(df: pd.DataFrame):
     d = df.copy()
-    d["측정일시"] = _to_dt(d["측정일시"]) ; d = d.dropna(subset=["측정일시"])  
-    d["weekday"] = d["측정일시"].dt.dayofweek
-    names = ["월", "화", "수", "목", "금", "토", "일"]
-    g = d.groupby("weekday")["전력사용량(kWh)"].mean().reset_index()
-    g["요일"] = g["weekday"].map(lambda x: names[x])
-    fig = go.Figure(go.Bar(x=g["요일"], y=g["전력사용량(kWh)"]))
-    _apply_plot_theme(fig, height=360)
-    fig.update_layout(title="요일별 평균 전력 사용량 (주말 강조 없음)")
-    fig.update_xaxes(title="요일")
-    fig.update_yaxes(title="평균 전력사용량 (kWh)")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("weekday")))
+    d['측정일시'] = _to_dt(d['측정일시'])
+    d['weekday'] = d['측정일시'].dt.dayofweek
+    names = ['월','화','수','목','금','토','일']
+    wk = d.groupby('weekday')['전력사용량(kWh)'].mean().reset_index()
+    wk['요일'] = wk['weekday'].map(lambda x: names[x])
+    fig = go.Figure()
+    if not wk.empty:
+        fig.add_bar(x=wk['요일'], y=wk['전력사용량(kWh)'], text=wk['전력사용량(kWh)'].round(2), textposition='outside', name='평균')
+    fig.update_layout(title='요일별 평균 전력 사용량', xaxis_title='요일', yaxis_title='kWh', height=420, showlegend=False, margin=dict(l=40, r=20, t=60, b=40))
+    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
 
 
-def plot_worktype_distribution(df: pd.DataFrame) -> ui.Tag:
-    if "작업유형" not in df.columns:
-        return ui.div("작업유형 컬럼 없음", class_="p-3 text-muted")
-    counts = df["작업유형"].value_counts()
-    fig = go.Figure(go.Bar(x=counts.index, y=counts.values))
-    _apply_plot_theme(fig, height=360)
-    fig.update_layout(title="작업유형별 데이터 분포")
-    fig.update_xaxes(title="작업유형")
-    fig.update_yaxes(title="빈도수")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("worktype")))
+def plot_worktype_distribution(df: pd.DataFrame):
+    if '작업유형' not in df.columns:
+        return ui.div('작업유형 컬럼 없음', class_='p-3 small-muted')
+    vc = df['작업유형'].value_counts()
+    fig = go.Figure()
+    if not vc.empty:
+        fig.add_bar(x=vc.index, y=vc.values, text=vc.values, textposition='outside')
+    fig.update_layout(title='작업유형별 분포', xaxis_title='작업유형', yaxis_title='건수', height=420, showlegend=False, margin=dict(l=40, r=20, t=60, b=40))
+    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
 
 
-# ─────────────────────────────────────────────
-# 전처리 탭 (텍스트 카드)
-# ─────────────────────────────────────────────
+# ==========================================================
+# 전처리 설명 블록 (모델링 코드와 정합)
+# ==========================================================
 
-def render_pipeline_accordion() -> ui.Tag:
+def render_pipeline_accordion():
     return ui.accordion(
         ui.accordion_panel(
             "Step 0: 데이터 정제",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("자정 롤오버 보정:"), " 00:00:00 → 다음날 00:00:00로 수정"),
-                ui.tags.li(ui.tags.strong("이상 시점 제거:"), " 2024-11-07 00:00:00"),
-                ui.tags.li(ui.tags.strong("극단치 제거:"), " 타겟(전기요금) 상위 0.7% (99.3% 분위수 초과)"),
-            ),
+                ui.tags.li(ui.tags.b("자정 롤오버 보정:"), " 00:00 → 다음날 00:00 교정"),
+                ui.tags.li(ui.tags.b("이상 시점 제거:"), " 2018-11-07 00:00:00"),
+                ui.tags.li(ui.tags.b("극단치 제거:"), " 전기요금 상위 0.7% 컷")
+            )
         ),
         ui.accordion_panel(
             "Step 1: 기본 시간 변수",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("시간 분해:"), " day, hour, minute, weekday"),
-                ui.tags.li(ui.tags.strong("주말 플래그:"), " is_weekend (weekday >= 5)"),
-                ui.tags.li(ui.tags.strong("공휴일 플래그:"), " is_holiday, is_holiday_eve, is_holiday_after"),
-                ui.tags.li(ui.tags.strong("시간대 구분:"), " is_peak_after (13-17h), is_peak_even (18-22h), is_night (23-5h)"),
-                ui.tags.li(ui.tags.strong("hour_of_week:"), " weekday*24 + hour (0~167)"),
-            ),
+                ui.tags.li(ui.tags.b("시간 분해:"), " day/hour/minute/weekday/month"),
+                ui.tags.li(ui.tags.b("주말 플래그:"), " is_weekend"),
+                ui.tags.li(ui.tags.b("공휴일 플래그:"), " is_holiday/eve/after — 기준연도 사용"),
+                ui.tags.li(ui.tags.b("시간대 구분:"), " is_peak_after, is_peak_even, is_night"),
+                ui.tags.li(ui.tags.b("hour_of_week:"), " 0~167")
+            )
         ),
         ui.accordion_panel(
-            "Step 2: 주기성 인코딩 (사이클릭)",
+            "Step 2: 주기성 인코딩",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("1차 고조파:"), " hour_sin, hour_cos (24시간 주기)"),
-                ui.tags.li(ui.tags.strong("2차 고조파:"), " hour_sin2, hour_cos2 (12시간 주기)"),
-                ui.tags.li(ui.tags.strong("요일 주기:"), " dow_sin, dow_cos (7일 주기)"),
-            ),
+                ui.tags.li(ui.tags.b("1차/2차 고조파:"), " hour_sin/cos, hour_sin2/cos2"),
+                ui.tags.li(ui.tags.b("요일 주기:"), " dow_sin/cos")
+            )
         ),
         ui.accordion_panel(
-            "Step 3: OOF 기반 3변수 (5-Fold TimeSeriesSplit)",
+            "Step 3: OOF 3변수 (5Fold TS)",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("oof_kwh:"), " 전력사용량 예측 (LightGBM MAE)"),
-                ui.tags.li(ui.tags.strong("oof_reactive:"), " 지상무효전력량 예측"),
-                ui.tags.li(ui.tags.strong("oof_pf:"), " 지상역률(%) 예측"),
-                ui.tags.li(ui.tags.em("목적: 미래 정보 없이 현재 시점 특성 추정")),
-            ),
+                ui.tags.li("oof_kwh, oof_reactive, oof_pf"),
+                ui.tags.li("미래 정보 차단 목적의 OOF 방식")
+            )
         ),
         ui.accordion_panel(
-            "Step 4: 시차(Lag) 변수",
+            "Step 4: 시차(Lag)",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("lag1:"), " 1스텝 전 (15분 전)"),
-                ui.tags.li(ui.tags.strong("lag1h:"), " 4스텝 전 (1시간 전)"),
-                ui.tags.li(ui.tags.strong("lag6h:"), " 24스텝 전 (6시간 전)"),
-                ui.tags.li(ui.tags.strong("lag24h:"), " 96스텝 전 (1일 전 동시간)"),
-                ui.tags.li(ui.tags.strong("lag48h:"), " 192스텝 전 (2일 전 동시간)"),
-                ui.tags.li(ui.tags.strong("lag7d:"), " 672스텝 전 (7일 전 동시간)"),
-            ),
+                ui.tags.li("lag1, 1h, 6h, 24h, 48h, 7d"),
+            )
         ),
         ui.accordion_panel(
-            "Step 5: 롤링 통계",
+            "Step 5: 롤링/EMA",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("roll6h:"), " 6시간 이동평균 (24스텝, min_periods=3)"),
-                ui.tags.li(ui.tags.strong("roll24h:"), " 24시간 이동평균 (96스텝, min_periods=6)"),
-                ui.tags.li(ui.tags.strong("ema24h:"), " 24시간 지수이동평균 (span=96)"),
-            ),
+                ui.tags.li("roll6h, roll24h, ema24h — shift(1) 후 집계")
+            )
         ),
         ui.accordion_panel(
-            "Step 6: 차분 변수",
+            "Step 6: 차분",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("samehour_d1:"), " 전일 동시간 차분 (현재 - lag24h)"),
-                ui.tags.li(ui.tags.strong("samehour_w1:"), " 전주 동시간 차분 (현재 - lag7d)"),
-                ui.tags.li(ui.tags.strong("samehour_w2:"), " 전전주 동시간 차분 (현재 - lag14d)"),
-                ui.tags.li(ui.tags.strong("diff1h:"), " 1시간 차분 (현재 - lag1h)"),
-            ),
+                ui.tags.li("samehour_d1, samehour_w1, samehour_w2, diff1h")
+            )
         ),
         ui.accordion_panel(
-            "Step 7: 비율 & 프록시 변수",
+            "Step 7: 비율/프록시",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("oof_ratio:"), " reactive / kwh (무효전력 비율)"),
-                ui.tags.li(ui.tags.strong("oof_pf_proxy:"), " kwh / (kwh + reactive) (역률 대리변수)"),
-                ui.tags.li(ui.tags.strong("oof_ratio_ema24h:"), " oof_ratio의 24시간 EMA"),
-            ),
+                ui.tags.li("oof_ratio, oof_pf_proxy, oof_ratio_ema24h")
+            )
         ),
         ui.accordion_panel(
-            "Step 8: 시간대 프로필 & 잔차",
+            "Step 8: 프로필/잔차·변화율",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("how_profile_kwh:"), " hour_of_week별 과거 평균 (누적평균 shift 방식)"),
-                ui.tags.li(ui.tags.strong("how_resid_kwh:"), " 실제값 - 프로필 (이상 탐지용)"),
-                ui.tags.li(ui.tags.strong("kwh_rate_w1:"), " (현재 - lag7d) / |lag7d| (주간 변화율, -3~3 클리핑)"),
-                ui.tags.li(ui.tags.strong("kwh_rate_w2:"), " (현재 - lag14d) / |lag14d| (2주 변화율)"),
-            ),
+                ui.tags.li("how_profile_kwh, how_resid_kwh, kwh_rate_w1, kwh_rate_w2 — OOF 누적평균 기반")
+            )
         ),
         ui.accordion_panel(
             "Step 9: 카테고리화",
             ui.tags.ul(
-                ui.tags.li(ui.tags.strong("how_cat:"), " hour_of_week를 문자열 카테고리로 (168개 클래스)"),
-                ui.tags.li(ui.tags.strong("작업유형:"), " 결측치 → 'UNK', Categorical dtype"),
-            ),
+                ui.tags.li("how_cat(=hour_of_week 문자열), 작업유형")
+            )
         ),
         id="pipeline_accordion",
-        open=["Step 0: 데이터 정제", "Step 3: OOF 기반 3변수 (5-Fold TimeSeriesSplit)"],
+        open=["Step 0: 데이터 정제", "Step 3: OOF 3변수 (5Fold TS)"]
     )
 
 
-def render_feature_summary() -> ui.HTML:
+def render_feature_summary():
     html = """
     <div class="p-3" style="font-size: 1rem;">
-      <div class="alert alert-primary">
-        <h5 class="mb-3">생성된 피처 통계</h5>
-        <ul class="mb-0" style="font-size: 1rem;">
-          <li><strong>총 피처 수:</strong> 100+ 개</li>
-          <li><strong>수치형 피처:</strong> 95+ 개</li>
-          <li><strong>범주형 피처:</strong> 2개 (작업유형, how_cat)</li>
-        </ul>
-      </div>
-      <table class="table table-hover mt-3" style="font-size: 0.95rem;">
+      <table class="table table-hover mt-0" style="font-size: 0.95rem;">
         <thead class="table-light">
-          <tr><th>피처 그룹</th><th>개수</th><th>주요 피처 예시</th></tr>
+          <tr><th>피처 그룹</th><th>개수</th><th>예시</th></tr>
         </thead>
         <tbody>
-          <tr><td><strong>시간 기본</strong></td><td>~15개</td><td>hour, weekday, is_weekend, is_holiday, hour_of_week</td></tr>
-          <tr><td><strong>주기성 인코딩</strong></td><td>6개</td><td>hour_sin/cos, hour_sin2/cos2, dow_sin/cos</td></tr>
-          <tr><td><strong>OOF 기본</strong></td><td>3개</td><td>oof_kwh, oof_reactive, oof_pf</td></tr>
-          <tr><td><strong>Lag 변수</strong></td><td>~18개</td><td>oof_kwh_lag1h/24h/48h/7d × 3개 OOF</td></tr>
-          <tr><td><strong>롤링 통계</strong></td><td>~9개</td><td>oof_kwh_roll6h/24h/ema24h × 3개 OOF</td></tr>
-          <tr><td><strong>차분 변수</strong></td><td>~12개</td><td>oof_kwh_samehour_d1/w1/w2/diff1h × 3개 OOF</td></tr>
-          <tr><td><strong>비율/프록시</strong></td><td>3개</td><td>oof_ratio, oof_pf_proxy, oof_ratio_ema24h</td></tr>
-          <tr><td><strong>프로필/잔차</strong></td><td>4개</td><td>how_profile_kwh, how_resid_kwh, kwh_rate_w1/w2</td></tr>
-          <tr><td><strong>카테고리</strong></td><td>2개</td><td>작업유형, how_cat</td></tr>
+          <tr><td><b>시간 기본</b></td><td>~15</td><td>hour, weekday, is_weekend, is_holiday, hour_of_week</td></tr>
+          <tr><td><b>주기성 인코딩</b></td><td>6</td><td>hour_sin/cos, hour_sin2/cos2, dow_sin/cos</td></tr>
+          <tr><td><b>OOF 기본</b></td><td>3</td><td>oof_kwh, oof_reactive, oof_pf</td></tr>
+          <tr><td><b>Lag</b></td><td>~18</td><td>각 OOF에 1h/6h/24h/48h/7d</td></tr>
+          <tr><td><b>롤링/EMA</b></td><td>~9</td><td>roll6h/24h, ema24h × 3</td></tr>
+          <tr><td><b>차분</b></td><td>~12</td><td>samehour_d1/w1/w2, diff1h × 3</td></tr>
+          <tr><td><b>비율/프록시</b></td><td>3</td><td>oof_ratio, oof_pf_proxy, oof_ratio_ema24h</td></tr>
+          <tr><td><b>프로필/잔차·변화율</b></td><td>4</td><td>how_profile_kwh, how_resid_kwh, kwh_rate_w1/w2</td></tr>
+          <tr><td><b>카테고리</b></td><td>2</td><td>작업유형, how_cat</td></tr>
         </tbody>
       </table>
     </div>
@@ -382,22 +419,21 @@ def render_feature_summary() -> ui.HTML:
     return ui.HTML(html)
 
 
-def render_scaling_info() -> ui.HTML:
+def render_scaling_info():
     html = """
     <div class="p-4" style="font-size: 1rem;">
       <div class="alert alert-success">
-        <h6 class="mb-3">스케일링 미적용</h6>
-        <p class="mb-2"><strong>이유:</strong> 트리 기반 모델은 변수 스케일 영향 적음</p>
-        <ul class="mb-0"><li>트리는 <strong>분할 지점(threshold)</strong> 중심</li><li>절대적 값 크기 무관</li></ul>
+        <h6 class="mb-2">스케일링 미적용</h6>
+        <p class="mb-0">트리 기반 모델에 한해 스케일 영향 미미</p>
       </div>
-      <h6 class="mt-4 mb-3">인코딩 전략</h6>
+      <h6 class="mt-3 mb-2">인코딩 전략</h6>
       <table class="table table-sm table-striped">
-        <thead><tr><th>변수 타입</th><th>처리 방법</th><th>상세</th></tr></thead>
+        <thead><tr><th>타입</th><th>처리</th><th>상세</th></tr></thead>
         <tbody>
-          <tr><td><strong>수치형</strong></td><td>미적용</td><td>원본 값 사용</td></tr>
-          <tr><td><strong>범주형 (작업유형)</strong></td><td>Categorical dtype</td><td>LightGBM categorical_feature 자동 처리</td></tr>
-          <tr><td><strong>범주형 (how_cat)</strong></td><td>String → Categorical</td><td>168개 클래스 (hour_of_week 0~167)</td></tr>
-          <tr><td><strong>결측치</strong></td><td>Median Imputation</td><td>Train 중앙값 대체</td></tr>
+          <tr><td>수치형</td><td>원본</td><td>값 그대로</td></tr>
+          <tr><td>범주형(작업유형)</td><td>Categorical dtype</td><td>LGBM categorical_feature 사용</td></tr>
+          <tr><td>범주형(how_cat)</td><td>String→Categorical</td><td>hour_of_week 168 클래스</td></tr>
+          <tr><td>결측</td><td>Median</td><td>Train 기준</td></tr>
         </tbody>
       </table>
     </div>
@@ -405,144 +441,299 @@ def render_scaling_info() -> ui.HTML:
     return ui.HTML(html)
 
 
-def render_leakage_check() -> ui.HTML:
+def render_leakage_check():
     html = """
     <div class="p-4" style="font-size: 1rem;">
-      <h6 class="mb-3">데이터 누수 점검 체크리스트</h6>
-      <div class="list-group">
-        <div class="list-group-item"><h6 class="mb-2">타겟 변수</h6><p class="mb-0">전기요금(원) 단일 사용, 미래 정보 차단</p></div>
-        <div class="list-group-item"><h6 class="mb-2">시간 분할</h6><p class="mb-0">TimeSeriesSplit 적용, 순서 보존</p></div>
-        <div class="list-group-item"><h6 class="mb-2">OOF 변수</h6><p class="mb-0">5-Fold TS 기반 OOF 예측</p></div>
-        <div class="list-group-item"><h6 class="mb-2">Lag 변수</h6><p class="mb-0">shift() 기반 과거 참조</p></div>
-        <div class="list-group-item"><h6 class="mb-2">롤링 통계</h6><p class="mb-0">shift(1) 후 rolling, 현재 시점 제외</p></div>
-        <div class="list-group-item"><h6 class="mb-2">시간대 프로필</h6><p class="mb-0">누적평균 shift 구조</p></div>
-        <div class="list-group-item"><h6 class="mb-2">스케일링/결측 처리</h6><p class="mb-0">Train 중앙값 기준 변환</p></div>
-        <div class="list-group-item list-group-item-warning"><h6 class="mb-2">주의사항</h6><ul class="mb-0"><li>공휴일 정보 2024년 달력 기준</li><li>Test lag는 Train 마지막 시점 기준 생성</li></ul></div>
-        <div class="list-group-item list-group-item-success"><h6 class="mb-2">최종 검증</h6><p class="mb-0">Holdout MAE 확인</p></div>
+      <h6 class="mb-2">데이터 누수 점검</h6>
+      <ul>
+        <li>TimeSeriesSplit(3-fold) — 시간 순서 보존</li>
+        <li>OOF 3변수 — 미래 정보 차단</li>
+        <li>lag/rolling — shift 후 집계</li>
+        <li>프로필 — 누적평균의 shift(OoF) 방식</li>
+        <li>스케일링/결측 — Train 통계로 transform</li>
+      </ul>
+      <div class="small-muted">주의: 공휴일은 기준연도 캘린더 사용, Test lag는 Train 말단 기준</div>
+    </div>
+    """
+    return ui.HTML(html)
+
+
+# ==========================================================
+# 스토리라인 (월/일/시간/분/계절)
+# ==========================================================
+
+def render_eda_storyline_panels(df: pd.DataFrame):
+    if "측정일시" not in df.columns:
+        return ui.div("측정일시 컬럼 부재", class_="billx-panel p-3")
+
+    d = df.copy()
+    d["측정일시"] = _to_dt(d["측정일시"])
+    d = d.dropna(subset=["측정일시"]).sort_values("측정일시")
+
+    # 1) 월별
+    d["month"] = d["측정일시"].dt.month
+    m = d.groupby("month")["전기요금(원)"].sum().reset_index()
+    fig_m = go.Figure()
+    fig_m.add_bar(x=m["month"], y=m["전기요금(원)"], text=m["전기요금(원)"].round(0), textposition="outside")
+    fig_m.update_layout(title="월별 전기요금 합계", height=380, margin=dict(l=40, r=20, t=60, b=40))
+
+    # 2) 일별
+    d["date"] = d["측정일시"].dt.date
+    byday = d.groupby("date")["전기요금(원)"].sum().reset_index()
+    fig_d = go.Figure()
+    fig_d.add_scatter(x=byday["date"], y=byday["전기요금(원)"], mode="lines")
+    fig_d.update_layout(title="일별 전기요금 추이", height=380, margin=dict(l=40, r=20, t=60, b=40))
+
+    # 3) 시간별
+    d["hour"] = d["측정일시"].dt.hour
+    byhour = d.groupby("hour")["전기요금(원)"].mean().reset_index()
+    fig_h = go.Figure()
+    fig_h.add_scatter(x=byhour["hour"], y=byhour["전기요금(원)"], mode="lines+markers")
+    fig_h.update_layout(title="시간별 평균 전기요금", height=380, margin=dict(l=40, r=20, t=60, b=40))
+
+    # 4) 15분(분 단위)
+    d["minute"] = d["측정일시"].dt.minute
+    bymin = d.groupby(["hour","minute"], as_index=False)["전기요금(원)"].mean()
+    bymin["time_in_hour"] = bymin["hour"].astype(str) + ":" + bymin["minute"].astype(str).str.zfill(2)
+    fig_q = go.Figure()
+    fig_q.add_scatter(x=bymin["time_in_hour"], y=bymin["전기요금(원)"], mode="lines", showlegend=False)
+    fig_q.update_layout(title="분별(15분) 평균 전기요금", height=380, xaxis_tickangle=45, margin=dict(l=40, r=20, t=60, b=80))
+
+    # 5) 계절별
+    d["season"] = d["측정일시"].dt.month.map(_season_of_month)
+    bys = d.groupby("season")["전기요금(원)"].mean().reindex(["spring","summer","autumn","winter"]).reset_index()
+    fig_s = go.Figure()
+    fig_s.add_bar(x=bys["season"], y=bys["전기요금(원)"], text=bys["전기요금(원)"].round(0), textposition="outside")
+    fig_s.update_layout(title="계절별 평균 전기요금", height=380, margin=dict(l=40, r=20, t=60, b=40))
+
+    return ui.div(
+        ui.div(ui.h5("스토리라인", class_="billx-panel-title"),
+               ui.tags.ol(
+                   ui.tags.li("월/일/시간/분/계절 단위로 전기요금 패턴 확인"),
+                   ui.tags.li("피크 시간대 대비 반영 — is_peak_after, is_peak_even, is_night"),
+                   ui.tags.li("주기성 반영 — hour_sin/cos, hour_sin2/cos2, dow_sin/cos"),
+               ),
+               class_="billx-panel"),
+        ui.layout_columns(
+            ui.div(ui.HTML(fig_m.to_html(include_plotlyjs='cdn', full_html=False)), class_="billx-panel"),
+            ui.div(ui.HTML(fig_d.to_html(include_plotlyjs='cdn', full_html=False)), class_="billx-panel"),
+            col_widths=[6,6]
+        ),
+        ui.layout_columns(
+            ui.div(ui.HTML(fig_h.to_html(include_plotlyjs='cdn', full_html=False)), class_="billx-panel"),
+            ui.div(ui.HTML(fig_q.to_html(include_plotlyjs='cdn', full_html=False)), class_="billx-panel"),
+            col_widths=[6,6]
+        ),
+        ui.div(ui.HTML(fig_s.to_html(include_plotlyjs='cdn', full_html=False)), class_="billx-panel"),
+    )
+
+
+# ==========================================================
+# NEW — 00:00 롤오버 보정 리포트
+# ==========================================================
+
+def render_midnight_rollover_fix(df: pd.DataFrame):
+    if "측정일시" not in df.columns:
+        return ui.div("측정일시 컬럼 부재", class_="billx-panel p-3")
+
+    d = df[["측정일시", "전기요금(원)"]].copy()
+    d["측정일시"] = _to_dt(d["측정일시"]).dropna()
+    d = d.sort_values("측정일시")
+
+    ts = d["측정일시"]
+    mask = (ts.dt.hour == 0) & (ts.dt.minute == 0)
+    n_total = len(ts)
+    n_fix = int(mask.sum())
+    pct = round(n_fix / n_total * 100, 2) if n_total else 0.0
+
+    # +1일 보정 시뮬레이션 (원본 데이터는 변경하지 않음)
+    ts_fix = ts.copy()
+    ts_fix.loc[mask] = ts_fix.loc[mask] + pd.Timedelta(days=1)
+
+    # 일별 합계 비교 (원본 vs 보정)
+    d_o = d.copy(); d_o["date"] = ts.dt.date
+    daily_o = d_o.groupby("date", as_index=False)["전기요금(원)"].sum().rename(columns={"전기요금(원)":"원본"})
+
+    d_f = d.copy(); d_f["date"] = ts_fix.dt.date
+    daily_f = d_f.groupby("date", as_index=False)["전기요금(원)"].sum().rename(columns={"전기요금(원)":"보정"})
+
+    daily = pd.merge(daily_o, daily_f, on="date", how="outer").fillna(0)
+    daily["차이"] = daily["보정"] - daily["원본"]
+
+    fig = go.Figure()
+    fig.add_scatter(x=daily["date"], y=daily["원본"], name="원본", mode="lines", line=dict(width=2, color=_PALETTE["muted"]))
+    fig.add_scatter(x=daily["date"], y=daily["보정"], name="보정(+1일)", mode="lines", line=dict(width=2, color=_PALETTE["accent"]))
+    _apply_layout(fig, title="자정(00:00) 롤오버 보정 — 일별 합계 영향", height=360)
+    fig.update_yaxes(title_text="전기요금(원)")
+
+    # 샘플 10건 (원본 vs +1일)
+    sample = pd.DataFrame({
+        "원본": ts.astype(str),
+        "+1일 보정": ts_fix.astype(str),
+        "변경여부": np.where(mask, "SHIFT", "—")
+    }).head(10)
+
+    sample_html = sample.to_html(classes="table table-sm table-striped", index=False, border=0)
+
+    html = f"""
+    <div class=\"billx-panel\">
+      <div class=\"row g-3\">
+        <div class=\"col-md-5\">
+          <ul class=\"mb-2\">
+            <li>검출 수: <b>{n_fix:,}</b> / {n_total:,} ({pct}%)</li>
+            <li>규칙: 시각이 00:00인 관측치는 <code>+1일</code>로 이동하여 날짜 경계 정합성 확보</li>
+          </ul>
+          <div class=\"small-muted\">※ EDA 보고용 시뮬레이션이며 원본 데이터는 수정하지 않습니다.</div>
+          <div class=\"mt-3\">{sample_html}</div>
+        </div>
+        <div class=\"col-md-7\">{fig.to_html(include_plotlyjs='cdn', full_html=False)}</div>
       </div>
     </div>
     """
     return ui.HTML(html)
 
 
-# ─────────────────────────────────────────────
-# EDA 스토리라인 (요약 텍스트 + 그래프 묶음)
-# ─────────────────────────────────────────────
+# ==========================================================
+# 달력 정합성 스토리라인 (연 전체, 비윤년 5개년 비교)
+# ==========================================================
 
-def _story_metrics(df: pd.DataFrame) -> dict:
+def render_calendar_alignment_storyline(df: pd.DataFrame):
+    if "측정일시" not in df.columns:
+        return ui.div("측정일시 컬럼 부재로 정합성 진단 생략", class_="billx-panel small-muted p-3")
+
     d = df[["측정일시", "전기요금(원)"]].copy()
-    d["측정일시"] = _to_dt(d["측정일시"]) ; d = d.dropna(subset=["측정일시"])  
-    d = d[d["전기요금(원)"].notna()]
-    if d.empty:
-        return {}
-    d["month"], d["date"], d["hour"] = d["측정일시"].dt.month, d["측정일시"].dt.date, d["측정일시"].dt.hour
-    by_m = d.groupby("month")["전기요금(원)"].sum()
-    top_m = int(by_m.idxmax()) if len(by_m) else None
-    bot_m = int(by_m.idxmin()) if len(by_m) else None
-    by_h = d.groupby("hour")["전기요금(원)"].mean()
-    top_hours = ", ".join([f"{int(h)}시" for h in by_h.sort_values(ascending=False).head(3).index]) if len(by_h) else "-"
-    low_hours = ", ".join([f"{int(h)}시" for h in by_h.sort_values(ascending=True).head(3).index]) if len(by_h) else "-"
-    return {"top_m": top_m, "bot_m": bot_m, "top_hours": top_hours, "low_hours": low_hours}
+    d["측정일시"] = _to_dt(d["측정일시"])
+    d = d.dropna(subset=["측정일시"]).sort_values("측정일시")
+
+    # 0) 윤년 2/29 존재 여부
+    has_feb29 = ((d["측정일시"].dt.month == 2) & (d["측정일시"].dt.day == 29)).any()
+    leap_line = "윤년 2/29 관측" if has_feb29 else "윤년 2/29 미관측"
+
+    # 1) 연 전체 범위의 주말 플래그
+    full_dates = d["측정일시"]
+    w_ref = _weekend_flag(full_dates).to_numpy()
+
+    # 2) 후보 연도(비윤년 5개년) 비교
+    candidates = [2018, 2019, 2021, 2022, 2023]
+    bars_x, bars_y, details = [], [], []
+    hol_hits_map = {}
+
+    for yr in candidates:
+        ts_y = _safe_replace_year(full_dates, yr)
+        w_y = _weekend_flag(ts_y).to_numpy()
+        mismatch = int((w_ref != w_y).sum())
+
+        hols = _holidays_by_year(yr)
+        hits = int(pd.Series(pd.to_datetime(ts_y)).dt.date.isin(hols).sum())
+
+        bars_x.append(str(yr))
+        bars_y.append(mismatch)
+        details.append((yr, mismatch, hits, len(w_y)))
+        hol_hits_map[yr] = hits
+
+    details.sort(key=lambda x: x[1])
+    best_year, best_mis, best_hol_hits, N = details[0]
+
+    # 3) 막대그래프
+    fig_mismatch = go.Figure()
+    fig_mismatch.add_bar(x=bars_x, y=bars_y, name="주말 불일치 수", marker_color=_PALETTE["primary"])
+    fig_mismatch.update_layout(
+        title="연 전체 주말 플래그 불일치(원본 vs 연도치환)",
+        yaxis_title="불일치 수",
+        height=380,
+        margin=dict(l=40, r=20, t=60, b=40)
+    )
+
+    li_html = [
+        f"<li>후보 {yr}: 주말 불일치 {mis:,} / {tot:,} | 공휴일 매칭 {hol_hits_map[yr]:,}</li>"
+        for yr, mis, _, tot in details
+    ]
+    ul_html = "".join(li_html)
+    fig_html = fig_mismatch.to_html(include_plotlyjs='cdn', full_html=False)
+
+    html = f"""
+    <div class="billx-panel">
+      <h6 class="billx-panel-title">달력 정합성 — 기준연도 판별(연 전체)</h6>
+      <ol class="mb-2">
+        <li>윤년 유무 점검: {leap_line}</li>
+        <li>연 전체 기간에서 후보 비윤년 5개년과 주말 플래그 비교</li>
+        <li>오차 최소 연도 선택 → 기준연도 <b>{best_year}</b> 지정</li>
+      </ol>
+      <ul class="mb-2 small-muted">{ul_html}</ul>
+      <div class="small-muted">공휴일 세트는 대체·임시 공휴일 제외, 사용자 제공 목록 기반</div>
+    </div>
+    <div class="billx-panel">{fig_html}</div>
+    """
+    return ui.HTML(html)
 
 
-def plot_monthly_cost(df: pd.DataFrame) -> ui.HTML:
+# ==========================================================
+# 달력 정합성 오버레이(선택 연도) — 연 전체 주말/공휴일 하이라이트
+# ==========================================================
+
+def render_calendar_overlay(
+    df: pd.DataFrame,
+    year: int = 2018,
+    highlight_weekend: bool = True,
+    highlight_holiday: bool = True
+):
+    if "측정일시" not in df.columns:
+        return ui.div("측정일시 컬럼 부재", class_="billx-panel p-3")
+
     d = df[["측정일시", "전기요금(원)"]].copy()
-    d["측정일시"] = _to_dt(d["측정일시"]) ; d = d.dropna()
-    d["월"] = d["측정일시"].dt.to_period("M").dt.to_timestamp()
-    g = d.groupby("월")["전기요금(원)"].sum().reset_index()
-    fig = go.Figure(go.Bar(x=g["월"], y=g["전기요금(원)"]))
-    _apply_plot_theme(fig, height=340)
-    fig.update_layout(title="월별 전기요금 분포 (합계)")
-    fig.update_xaxes(title="월")
-    fig.update_yaxes(title="원")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("mon")))
+    d["측정일시"] = _to_dt(d["측정일시"])
+    d = d.dropna(subset=["측정일시"]).sort_values("측정일시")
 
+    # 연 전체 일별 합계
+    d["date"] = d["측정일시"].dt.date
+    daily = d.groupby("date", as_index=False)["전기요금(원)"].sum()
 
-def plot_daily_cost(df: pd.DataFrame) -> ui.HTML:
-    d = df[["측정일시", "전기요금(원)"]].copy()
-    d["측정일시"] = _to_dt(d["측정일시"]) ; d = d.dropna()
-    d["일"] = d["측정일시"].dt.date
-    g = d.groupby("일")["전기요금(원)"].sum().reset_index()
-    fig = go.Figure(go.Scatter(x=g["일"], y=g["전기요금(원)"], mode="lines"))
-    _apply_plot_theme(fig, height=340)
-    fig.update_layout(title="일별 전기요금 분포 (합계)")
-    fig.update_xaxes(title="일")
-    fig.update_yaxes(title="원")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("day")))
+    # 선택 연도로 캘린더 치환 → 주말/공휴일 라벨 생성
+    mapped = _safe_replace_year(pd.to_datetime(daily["date"]), year)
+    flags = pd.DataFrame({
+        "is_weekend": _weekend_flag(mapped).astype(bool),
+        "is_holiday": pd.Series(mapped).dt.date.isin(_holidays_by_year(year)),
+    })
 
+    def label_row(i):
+        w = bool(flags.loc[i, "is_weekend"]) if highlight_weekend else False
+        h = bool(flags.loc[i, "is_holiday"]) if highlight_holiday else False
+        if h:
+            return "공휴일"
+        if w:
+            return "주말"
+        return "평일"
 
-def plot_hourly_cost(df: pd.DataFrame) -> ui.HTML:
-    d = df[["측정일시", "전기요금(원)"]].copy()
-    d["측정일시"] = _to_dt(d["측정일시"]) ; d = d.dropna()
-    d["hour"] = d["측정일시"].dt.hour
-    g = d.groupby("hour")["전기요금(원)"].mean().reset_index()
-    fig = go.Figure(go.Scatter(x=g["hour"], y=g["전기요금(원)"], mode="lines+markers"))
-    _apply_plot_theme(fig, height=320)
-    fig.update_layout(title="시간별 전기요금 분포 (평균)")
-    fig.update_xaxes(title="시")
-    fig.update_yaxes(title="원")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("hour")))
+    labels = [label_row(i) for i in range(len(daily))]
 
-
-def plot_quarter_cost(df: pd.DataFrame) -> ui.HTML:
-    d = df[["측정일시", "전기요금(원)"]].copy()
-    d["측정일시"] = _to_dt(d["측정일시"]) ; d = d.dropna()
-    d["분"] = d["측정일시"].dt.minute  # (0, 15, 30, 45)
-    g = d.groupby("분")["전기요금(원)"].mean().reset_index()
-    fig = go.Figure(go.Box(x=g["분"], y=g["전기요금(원)"], boxpoints=False))
-    _apply_plot_theme(fig, height=320)
-    fig.update_layout(title="분별(15분) 전기요금 분포")
-    fig.update_xaxes(title="분(0,15,30,45)")
-    fig.update_yaxes(title="원")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("qtr")))
-
-
-def plot_season_cost(df: pd.DataFrame) -> ui.HTML:
-    d = df[["측정일시", "전기요금(원)"]].copy()
-    d["측정일시"] = _to_dt(d["측정일시"]) ; d = d.dropna()
-    d["계절"] = d["측정일시"].dt.month.map(_season_from_month)
-    order = ["봄", "여름", "가을", "겨울"]
-    g = d.groupby("계절")["전기요금(원)"].sum().reindex(order).reset_index()
-    fig = go.Figure(go.Bar(x=g["계절"], y=g["전기요금(원)"]))
-    _apply_plot_theme(fig, height=340)
-    fig.update_layout(title="계절별 전기요금 분포 (합계)")
-    fig.update_xaxes(title="계절")
-    fig.update_yaxes(title="원")
-    return ui.HTML(fig.to_html(include_plotlyjs="cdn", div_id=_uid("season")))
-
-
-def render_eda_storyline_panels(df: pd.DataFrame) -> ui.Tag:
-    if not {"측정일시", "전기요금(원)"}.issubset(df.columns):
-        return ui.div(ui.div("EDA 스토리 생성에 필요한 컬럼 부족 (측정일시, 전기요금(원))", class_="small-muted"), class_="billx-panel")
-
-    m = _story_metrics(df)
-    intro_html = ui.HTML(
-        (
-            "<div class=\"billx-panel\">"
-            "<h5 class=\"billx-panel-title\">EDA 스토리라인</h5>"
-            "<p class=\"mb-2\">월·일·시간·분·계절 단위 비용 패턴 점검을 통해 피처 설계 근거 확보</p>"
-            f"<ul class=\"mb-0\">"
-            f"<li>월별 분포: 고비용 {m.get('top_m','-')}월, 저비용 {m.get('bot_m','-')}월</li>"
-            f"<li>시간대 평균: 상위 {m.get('top_hours','-')}, 하위 {m.get('low_hours','-')}</li>"
-            "<li>분(15분) 분포: 운영 리듬 및 교대 타이밍 단서</li>"
-            "<li>계절별 합계: 냉난방/요금 정책 영향 장주기 변동</li>"
-            "</ul>"
-            "</div>"
+    fig = go.Figure()
+    for key in ["공휴일", "주말", "평일"]:
+        idx = [i for i, v in enumerate(labels) if v == key]
+        if not idx:
+            continue
+        color = _PALETTE["danger"] if key == "공휴일" else (_PALETTE["warn"] if key == "주말" else _PALETTE["primary"])
+        fig.add_scatter(
+            x=daily["date"].iloc[idx],
+            y=daily["전기요금(원)"].iloc[idx],
+            mode="markers",
+            name=f"{key}",
+            marker=dict(color=color, size=7),
         )
+    fig.add_scatter(
+        x=daily["date"],
+        y=daily["전기요금(원)"],
+        mode="lines",
+        name="전체 추이",
+        line=dict(width=1),
+        hoverinfo="skip"
     )
 
-    panels = ui.div(
-        ui.layout_columns(
-            ui.div(ui.h6("① 월별 합계"), plot_monthly_cost(df), class_="billx-panel"),
-            ui.div(ui.h6("② 일별 합계"), plot_daily_cost(df), class_="billx-panel"),
-            col_widths=[6, 6],
-        ),
-        ui.layout_columns(
-            ui.div(ui.h6("③ 시간별 평균"), plot_hourly_cost(df), class_="billx-panel"),
-            ui.div(ui.h6("④ 분(15분) 분포"), plot_quarter_cost(df), class_="billx-panel"),
-            col_widths=[6, 6],
-        ),
-        ui.div(ui.h6("⑤ 계절별 합계"), plot_season_cost(df), class_="billx-panel"),
+    fig.update_layout(
+        title=f"연 전체 일별 전기요금 — {year} 기준 주말/공휴일 강조",
+        xaxis_title="날짜",
+        yaxis_title="전기요금(원)",
+        height=460,
+        hovermode='x unified',
+        margin=dict(l=40, r=20, t=60, b=40),
     )
-
-    return ui.div(intro_html, panels)
+    return ui.HTML(fig.to_html(include_plotlyjs='cdn', full_html=False))
