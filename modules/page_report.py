@@ -6,7 +6,7 @@ import pandas as pd
 from pathlib import Path
 import os, shutil
 
-from shared import report_df
+from shared import report_df, TEMPLATE_PATH
 from viz.report_plots import mom_bar_chart, yearly_trend_chart
 
 # Word 템플릿/이미지 삽입에 필요한 것들
@@ -23,7 +23,6 @@ try:
 except Exception:
     _DOCXTPL_OK = False
 
-TEMPLATE_PATH = Path(r"C:\Users\LS\Desktop\electricity-project\data\electricity_bill_template_.docx")
 
 # 2024-01 ~ 2024-11 고정 선택지
 MONTH_CHOICES = {f"2024-{m:02d}": f"2024년 {m}월" for m in range(1, 12)}

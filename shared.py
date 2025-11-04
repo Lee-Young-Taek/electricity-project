@@ -27,6 +27,9 @@ try:
     report_df: pd.DataFrame = pd.read_csv(REPORT_CSV)
 except Exception:
     report_df = pd.DataFrame()
+    
+TEMPLATE_PATH = Path(DATA_DIR / "electricity_bill_template_.docx")
+
 
 # ===== SQLite 연결 =====
 def _open_readonly() -> sqlite3.Connection:
