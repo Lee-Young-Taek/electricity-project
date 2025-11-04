@@ -43,7 +43,7 @@ def make_dual_widget(
             hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, bgcolor="rgba(0,0,0,0)"),
             margin=dict(t=70, r=80, b=50, l=70),
-            title=title,
+            # title=title,
             height=height,
             uirevision=None,
             shapes=(),  # vertical guide lines

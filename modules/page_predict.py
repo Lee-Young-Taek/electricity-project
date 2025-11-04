@@ -85,7 +85,7 @@ def predict_ui():
 
         # ===== 실시간 Plotly: 최근 N개 포인트 (이중축) =====
         ui.div(
-            ui.div(f"전력사용량·전기요금 — 최근 {WINDOW_POINTS}개", class_="pred-panel-title"),
+            ui.div(f"전력사용량·전기요금", class_="pred-panel-title"),
             ui.div(output_widget("pred_ts_plot"), style="width:100%;"),
             class_="pred-panel",
         ),
