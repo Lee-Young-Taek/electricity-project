@@ -123,8 +123,8 @@ CURVE_FILES = {
 }
 
 
-def _load_learning_curves() -> Dict[str, pd.DataFrame]:
-    train_frames, valid_frames = [], []
+def _load_learning_curves() -> pd.DataFrame:
+    frames = []
     curve_dir = _output_dir()
 
     for label, filename in CURVE_FILES.items():
@@ -140,66 +140,62 @@ def _load_learning_curves() -> Dict[str, pd.DataFrame]:
         valid_col = next((c for c in df.columns if c.lower().startswith("valid")), None)
 
         if train_col is not None:
-            train_values = pd.to_numeric(df[train_col], errors="coerce")
-            train_frames.append(
+            frames.append(
                 pd.DataFrame({
                     "iteration": df["iteration"],
-                    "value": train_values,
-                    "model": label
+                    "value": pd.to_numeric(df[train_col], errors="coerce"),
+                    "model": label,
+                    "series": "Train"
                 })
             )
 
         if valid_col is not None:
-            valid_values = pd.to_numeric(df[valid_col], errors="coerce")
-            valid_frames.append(
+            frames.append(
                 pd.DataFrame({
                     "iteration": df["iteration"],
-                    "value": valid_values,
-                    "model": label
+                    "value": pd.to_numeric(df[valid_col], errors="coerce"),
+                    "model": label,
+                    "series": "Validation"
                 })
             )
 
-    train_df = pd.concat(train_frames, ignore_index=True) if train_frames else pd.DataFrame(columns=["iteration", "value", "model"])
-    valid_df = pd.concat(valid_frames, ignore_index=True) if valid_frames else pd.DataFrame(columns=["iteration", "value", "model"])
+    if not frames:
+        return pd.DataFrame(columns=["iteration", "value", "model", "series"])
 
-    return {"train": train_df, "valid": valid_df}
+    return pd.concat(frames, ignore_index=True)
 
 
-def _make_curve_html(data: pd.DataFrame, title: str) -> ui.HTML:
+def _render_learning_curve(data: pd.DataFrame) -> ui.HTML:
     if data.empty:
         return ui.div(
-            f"{title} 데이터가 없습니다.",
+            "학습 곡선 데이터를 찾을 수 없습니다.",
             class_="alert alert-info mb-0 small"
         )
 
-    data = data.dropna(subset=["value"]).sort_values(["model", "iteration"])
+    data = data.dropna(subset=["value"]).sort_values(["model", "series", "iteration"])
+    data["label"] = data["model"] + " · " + data["series"]
+
     fig = px.line(
         data,
         x="iteration",
         y="value",
-        color="model",
-        markers=False,
-        title=title,
+        color="label",
+        title="Learning Curves (MAE)",
     )
+    fig.update_traces(mode="lines")
     fig.update_layout(
         margin=dict(l=40, r=20, t=60, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
         xaxis_title="Iteration",
-        yaxis_title="MAE",
+        yaxis_title="MAE (원)",
         hovermode="x unified",
         template="plotly_white",
     )
-    fig.update_traces(mode="lines")
 
     html = to_html(fig, include_plotlyjs="cdn", full_html=False, config={"displayModeBar": False})
     return ui.HTML(html)
 
 
-def render_train_curve():
-    curves = _load_learning_curves()
-    return _make_curve_html(curves["train"], "Train Learning Curve")
-
-
-def render_val_curve():
-    curves = _load_learning_curves()
-    return _make_curve_html(curves["valid"], "Validation Learning Curve")
+def render_learning_curve():
+    data = _load_learning_curves()
+    return _render_learning_curve(data)
